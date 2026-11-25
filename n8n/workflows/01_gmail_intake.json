@@ -1,0 +1,81 @@
+{
+  "name": "LedgerPilot 01 - Gmail Invoice Intake (HMAC Signed)",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "simple": false,
+        "filters": { "q": "has:attachment filename:pdf label:INBOX is:unread" },
+        "options": { "downloadAttachments": true }
+      },
+      "id": "gmail-trigger-1",
+      "name": "Gmail Invoice Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.WEBHOOK_HMAC_SECRET || 'lp_dev_hmac_secret_change_in_prod_9f8e7d6c';\nconst item = $input.first();\nconst binaryKey = Object.keys(item.binary || {})[0];\nif (!binaryKey) throw new Error('No PDF attachment found');\nconst buf = await this.helpers.getBinaryDataBuffer(0, binaryKey);\nconst filename = item.binary[binaryKey].fileName || 'gmail_invoice.pdf';\nconst payload = {\n  filename,\n  content_base64: buf.toString('base64'),\n  idempotency_key: `gmail:${item.json.id}:${filename}`,\n  source_channel: 'N8N_GMAIL',\n  sender_email: item.json.from?.text || 'unknown',\n  subject: item.json.subject || 'Invoice Attachment'\n};\nconst rawBody = JSON.stringify(payload);\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst sig = 'sha256=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');\nreturn [{ json: { rawBody, timestamp, signature: sig } }];"
+      },
+      "id": "sign-payload-2",
+      "name": "Encode PDF & Sign HMAC-SHA256",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/v1/webhooks/n8n/intake",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-LedgerPilot-Timestamp", "value": "={{ $json.timestamp }}" },
+            { "name": "X-LedgerPilot-Signature", "value": "={{ $json.signature }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.rawBody }}"
+      },
+      "id": "post-intake-3",
+      "name": "POST Signed Intake to FastAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:8000/api/v1/invoices/{{ $json.invoice.id }}/process",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.CLERK_API_KEY || 'lp_clerk_dev_key_004' }}" }
+          ]
+        }
+      },
+      "id": "trigger-workflow-4",
+      "name": "Trigger LangGraph AP Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 300]
+    }
+  ],
+  "connections": {
+    "Gmail Invoice Trigger": {
+      "main": [[{ "node": "Encode PDF & Sign HMAC-SHA256", "type": "main", "index": 0 }]]
+    },
+    "Encode PDF & Sign HMAC-SHA256": {
+      "main": [[{ "node": "POST Signed Intake to FastAPI", "type": "main", "index": 0 }]]
+    },
+    "POST Signed Intake to FastAPI": {
+      "main": [[{ "node": "Trigger LangGraph AP Pipeline", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

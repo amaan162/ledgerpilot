@@ -1,0 +1,88 @@
+{
+  "name": "LedgerPilot 03 - Overdue SLA Escalation Watchdog",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "minutes", "minutesInterval": 15 }] }
+      },
+      "id": "schedule-1",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.WEBHOOK_HMAC_SECRET || 'lp_dev_hmac_secret_change_in_prod_9f8e7d6c';\nconst rawBody = JSON.stringify({ trigger: 'n8n_sla_watchdog' });\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst sig = 'sha256=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');\nreturn [{ json: { rawBody, timestamp, signature: sig } }];"
+      },
+      "id": "sign-sla-2",
+      "name": "Sign Watchdog Sweep (HMAC-SHA256)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/v1/webhooks/n8n/sla-sweep",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-LedgerPilot-Timestamp", "value": "={{ $json.timestamp }}" },
+            { "name": "X-LedgerPilot-Signature", "value": "={{ $json.signature }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.rawBody }}"
+      },
+      "id": "call-sweep-3",
+      "name": "Run FastAPI SLA Escalation Sweep",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [{ "value1": "={{ $json.escalated_count }}", "operation": "larger", "value2": 0 }]
+        }
+      },
+      "id": "if-escalated-4",
+      "name": "Any Overdue Approvals?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1020, 300]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "name", "value": "#fraud-alerts" },
+        "text": "={{ ':rotating_light: *LedgerPilot SLA Breach Alert:* ' + $json.escalated_count + ' overdue approval(s) have been escalated to Corporate Controller.' }}"
+      },
+      "id": "slack-escalate-5",
+      "name": "Alert Controller in Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1280, 260]
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{ "node": "Sign Watchdog Sweep (HMAC-SHA256)", "type": "main", "index": 0 }]]
+    },
+    "Sign Watchdog Sweep (HMAC-SHA256)": {
+      "main": [[{ "node": "Run FastAPI SLA Escalation Sweep", "type": "main", "index": 0 }]]
+    },
+    "Run FastAPI SLA Escalation Sweep": {
+      "main": [[{ "node": "Any Overdue Approvals?", "type": "main", "index": 0 }]]
+    },
+    "Any Overdue Approvals?": {
+      "main": [[{ "node": "Alert Controller in Slack", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

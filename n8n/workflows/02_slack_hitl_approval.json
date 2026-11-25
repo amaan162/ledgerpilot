@@ -1,0 +1,88 @@
+{
+  "name": "LedgerPilot 02 - Slack Block Kit HITL Approval & Resume",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ledgerpilot-approval-needed",
+        "responseMode": "onReceived"
+      },
+      "id": "webhook-approval-needed-1",
+      "name": "On Approval Requested (From FastAPI)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 200]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "name", "value": "#ap-approvals" },
+        "messageType": "block",
+        "blocksUi": "={{ JSON.stringify({ blocks: [ { type: 'header', text: { type: 'plain_text', text: 'LedgerPilot Approval Required' } }, { type: 'section', fields: [ { type: 'mrkdwn', text: '*Invoice:* ' + ($json.body.invoice_number || $json.body.invoice_id) }, { type: 'mrkdwn', text: '*Amount:* ' + ($json.body.currency || 'USD') + ' ' + ($json.body.total_amount || 'N/A') }, { type: 'mrkdwn', text: '*Required Role:* ' + $json.body.required_role }, { type: 'mrkdwn', text: '*SLA Due:* ' + $json.body.sla_due_at } ] }, { type: 'section', text: { type: 'mrkdwn', text: '*Policy Reason:* ' + $json.body.reason } }, { type: 'actions', elements: [ { type: 'button', style: 'primary', text: { type: 'plain_text', text: 'Approve & Stage Wire' }, value: JSON.stringify({ approval_id: $json.body.approval_id, decision: 'APPROVED' }), action_id: 'lp_approve' }, { type: 'button', style: 'danger', text: { type: 'plain_text', text: 'Reject Invoice' }, value: JSON.stringify({ approval_id: $json.body.approval_id, decision: 'REJECTED' }), action_id: 'lp_reject' } ] } ] }) }}"
+      },
+      "id": "slack-post-card-2",
+      "name": "Post Slack Block Kit Approval Card",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [520, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-interactive-action",
+        "responseMode": "onReceived"
+      },
+      "id": "slack-action-webhook-3",
+      "name": "On Slack Button Click",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 460]
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.WEBHOOK_HMAC_SECRET || 'lp_dev_hmac_secret_change_in_prod_9f8e7d6c';\nconst slackPayload = typeof $json.body.payload === 'string' ? JSON.parse($json.body.payload) : $json.body;\nconst actionVal = JSON.parse(slackPayload.actions[0].value);\nconst callbackBody = {\n  approval_id: actionVal.approval_id,\n  decision: actionVal.decision,\n  approver_email: slackPayload.user?.email || 'manager@ledgerpilot.io',\n  reason: `Slack Block Kit ${actionVal.decision} by ${slackPayload.user?.username || 'approver'}`,\n  slack_message_ts: slackPayload.message?.ts || null\n};\nconst rawBody = JSON.stringify(callbackBody);\nconst timestamp = String(Math.floor(Date.now() / 1000));\nconst sig = 'sha256=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`).digest('hex');\nreturn [{ json: { rawBody, timestamp, signature: sig } }];"
+      },
+      "id": "sign-callback-4",
+      "name": "Sign Slack Decision (HMAC-SHA256)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 460]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/api/v1/webhooks/n8n/approval-callback",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-LedgerPilot-Timestamp", "value": "={{ $json.timestamp }}" },
+            { "name": "X-LedgerPilot-Signature", "value": "={{ $json.signature }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.rawBody }}"
+      },
+      "id": "resume-langgraph-5",
+      "name": "Resume LangGraph Checkpoint via FastAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [820, 460]
+    }
+  ],
+  "connections": {
+    "On Approval Requested (From FastAPI)": {
+      "main": [[{ "node": "Post Slack Block Kit Approval Card", "type": "main", "index": 0 }]]
+    },
+    "On Slack Button Click": {
+      "main": [[{ "node": "Sign Slack Decision (HMAC-SHA256)", "type": "main", "index": 0 }]]
+    },
+    "Sign Slack Decision (HMAC-SHA256)": {
+      "main": [[{ "node": "Resume LangGraph Checkpoint via FastAPI", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}

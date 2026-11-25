@@ -1,0 +1,82 @@
+name: LedgerPilot CI — Lint, Security Red-Team & 100-Case Eval
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-verify:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ledgerpilot
+          POSTGRES_PASSWORD: ledgerpilot_dev_pass
+          POSTGRES_DB: ledgerpilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://ledgerpilot:ledgerpilot_dev_pass@localhost:5432/ledgerpilot
+      SYNC_DATABASE_URL: postgresql+psycopg://ledgerpilot:ledgerpilot_dev_pass@localhost:5432/ledgerpilot
+      CHECKPOINT_DATABASE_URL: postgresql://ledgerpilot:ledgerpilot_dev_pass@localhost:5432/ledgerpilot
+      WEBHOOK_HMAC_SECRET: lp_ci_hmac_secret_0000000000000000
+      ADMIN_API_KEY: lp_admin_dev_key_001
+      CONTROLLER_API_KEY: lp_controller_dev_key_002
+      MANAGER_API_KEY: lp_manager_dev_key_003
+      CLERK_API_KEY: lp_clerk_dev_key_004
+      GEMINI_API_KEY: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv & Python 3.12
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Enable pgvector extension
+        run: |
+          PGPASSWORD=ledgerpilot_dev_pass psql -h localhost -U ledgerpilot -d ledgerpilot -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Run Alembic migrations & seed enterprise fixtures
+        working-directory: backend
+        run: |
+          uv run alembic upgrade head
+          uv run python -m app.db.seed
+          uv run python -c "import asyncio; from sqlalchemy import select; from app.db.models import ContractChunk; from app.db.session import AsyncSessionLocal
+          async def fill():
+              async with AsyncSessionLocal() as db:
+                  chunks = (await db.scalars(select(ContractChunk).where(ContractChunk.embedding.is_(None)))).all()
+                  for c in chunks:
+                      c.embedding = [1.0] + [0.0] * 767
+                  await db.commit()
+          asyncio.run(fill())"
+
+      - name: Ruff lint check (backend + MCP + evals)
+        working-directory: backend
+        run: uv run ruff check app tests ../mcp_server ../evals
+
+      - name: Run Unit, Integration & 15 OWASP Red-Team Security Tests
+        working-directory: backend
+        run: uv run pytest -v
+
+      - name: Run 100-Case Golden Dataset Eval Gate
+        working-directory: backend
+        run: uv run python ../evals/run_eval.py

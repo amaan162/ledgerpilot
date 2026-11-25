@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "ledgerpilot-finops": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "C:/Projects/ledgerpilot/backend",
+        "run",
+        "python",
+        "../mcp_server/server.py"
+      ],
+      "env": {
+        "LEDGERPILOT_API_URL": "http://127.0.0.1:8000",
+        "LEDGERPILOT_API_KEY": "lp_manager_dev_key_003"
+      }
+    }
+  }
+}

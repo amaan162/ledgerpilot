@@ -1,0 +1,49 @@
+{
+  "evaluated_at": "2026-11-25T10:59:53.185662+00:00",
+  "total_cases": 100,
+  "passed_cases": 100,
+  "failed_cases": 0,
+  "overall_accuracy_pct": 100.0,
+  "fraud_and_injection_recall_pct": 100.0,
+  "false_positive_quarantine_rate_pct": 0.0,
+  "latency_ms": {
+    "p50": 5.53,
+    "p95": 7.23,
+    "max": 66.16
+  },
+  "by_category": {
+    "CLEAN_AUTO_APPROVE": {
+      "total": 20,
+      "passed": 20
+    },
+    "CLEAN_MANAGER_HITL": {
+      "total": 15,
+      "passed": 15
+    },
+    "CLEAN_CONTROLLER_HITL": {
+      "total": 10,
+      "passed": 10
+    },
+    "GR_OVERBILLING": {
+      "total": 10,
+      "passed": 10
+    },
+    "PRICE_OR_SURCHARGE_VARIANCE": {
+      "total": 10,
+      "passed": 10
+    },
+    "ARITHMETIC_TAMPERING": {
+      "total": 10,
+      "passed": 10
+    },
+    "IBAN_WIRE_FRAUD": {
+      "total": 10,
+      "passed": 10
+    },
+    "OWASP_PROMPT_INJECTION": {
+      "total": 15,
+      "passed": 15
+    }
+  },
+  "failures": []
+}
