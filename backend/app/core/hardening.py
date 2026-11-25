@@ -15,6 +15,28 @@ SECURITY_HEADERS: dict[str, str] = {
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
 }
 
+DOCS_PATHS: frozenset[str] = frozenset({"/docs", "/redoc", "/docs/oauth2-redirect"})
+
+DOCS_SECURITY_HEADERS: dict[str, str] = {
+    **SECURITY_HEADERS,
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
+        "img-src 'self' data: https://fastapi.tiangolo.com https://cdn.jsdelivr.net; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "worker-src 'self' blob:; "
+        "frame-ancestors 'none'"
+    ),
+}
+
+
+def get_security_headers(path: str) -> dict[str, str]:
+    """Return strict API security headers everywhere except FastAPI docs routes."""
+    if path in DOCS_PATHS:
+        return DOCS_SECURITY_HEADERS
+    return SECURITY_HEADERS
+
 
 class SlidingWindowRateLimiter:
     """

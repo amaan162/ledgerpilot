@@ -9,6 +9,12 @@
 
 ---
 
+## Live Deployment
+- **Live Command Center (Vercel):** https://ledgerpilot-delta.vercel.app
+- **Live FastAPI Swagger Docs (Render):** https://ledgerpilot-x5pt.onrender.com/docs
+
+---
+
 ## Live Links
 * **Live Command Center (Vercel):** _Add your Vercel URL after cloud deployment_
 * **Live API Swagger Docs (Render):** _Add your Render URL `/docs` after cloud deployment_

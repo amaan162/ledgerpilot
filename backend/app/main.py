@@ -14,10 +14,10 @@ from app.api.routes.security_ops import router as security_ops_router
 from app.api.routes.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.hardening import (
-    SECURITY_HEADERS,
     api_rate_limiter,
     build_rate_limit_response,
     extract_client_bucket_key,
+    get_security_headers,
 )
 from app.core.logging import configure_logging, correlation_id_ctx, get_logger
 from app.graph.checkpointer import checkpointer_manager
@@ -91,8 +91,9 @@ async def security_rate_limit_and_telemetry_middleware(request: Request, call_ne
         )
         correlation_id_ctx.reset(token)
 
-    # Apply MNC security headers to every HTTP response
-    for hdr, val in SECURITY_HEADERS.items():
+    # Apply MNC security headers to every HTTP response (scoped CSP for /docs & /redoc)
+    normalized_path = request.url.path.rstrip("/") or "/"
+    for hdr, val in get_security_headers(normalized_path).items():
         response.headers.setdefault(hdr, val)
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
