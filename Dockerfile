@@ -25,4 +25,4 @@ RUN mkdir -p /app/uploads /app/settlements
 WORKDIR /app/backend
 EXPOSE 8000
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run python -m app.db.seed && (uv run python -m app.services.rag || true) && uv run uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
