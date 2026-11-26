@@ -1,10 +1,14 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Always resolves to C:\Projects\ledgerpilot regardless of working directory
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+DEFAULT_GENERATIVE_MODEL = "gemini-3.8-flash"
+DEFAULT_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash-lite"
 
 
 class Settings(BaseSettings):
@@ -31,8 +35,8 @@ class Settings(BaseSettings):
     # LLM Provider
     LLM_PROVIDER: str = "gemini"
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.8-flash"
-    GEMINI_FALLBACK_MODELS: str = "gemini-3.6-flash,gemini-3.5-flash-lite"
+    GEMINI_MODEL: str = DEFAULT_GENERATIVE_MODEL
+    GEMINI_FALLBACK_MODELS: str = DEFAULT_FALLBACK_MODELS
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
     EMBEDDING_DIMENSIONS: int = 768
 
@@ -52,6 +56,14 @@ class Settings(BaseSettings):
 
     # Edge Orchestrator (n8n)
     N8N_WEBHOOK_BASE_URL: str = "http://localhost:5678/webhook"
+
+    @field_validator("GEMINI_MODEL", mode="before")
+    @classmethod
+    def guard_generative_model(cls, value: str | None) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned or "embedding" in cleaned.lower():
+            return DEFAULT_GENERATIVE_MODEL
+        return cleaned
 
     @property
     def settlement_dir_path(self) -> Path:

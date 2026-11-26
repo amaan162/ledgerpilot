@@ -8,7 +8,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.core.config import get_settings
+from app.core.config import DEFAULT_GENERATIVE_MODEL, get_settings
 from app.core.logging import get_logger
 from app.schemas.extraction import InvoiceExtraction, InvoiceExtractionLLM
 from app.schemas.rag import ContractComplianceLLM
@@ -18,12 +18,14 @@ logger = get_logger("ledgerpilot.llm")
 
 # Published Gemini API rates (USD per 1M tokens) for accurate operating-economics telemetry
 MODEL_RATES_USD_PER_1M: dict[str, tuple[Decimal, Decimal]] = {
+    "gemini-4-hydrogen": (Decimal("1.50"), Decimal("7.50")),
     "gemini-3.8-flash": (Decimal("0.75"), Decimal("3.75")),
     "gemini-3.6-flash": (Decimal("0.75"), Decimal("3.75")),
     "gemini-3.5-flash-lite": (Decimal("0.30"), Decimal("2.50")),
 }
 DEFAULT_RATES_USD_PER_1M = (Decimal("0.75"), Decimal("3.75"))
-FAILOVER_STATUS_CODES = {429, 500, 502, 503, 504}
+SAFE_GENERATIVE_FALLBACKS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+FAILOVER_STATUS_CODES = {404, 429, 500, 502, 503, 504}
 
 EXTRACTION_SYSTEM_PROMPT = """
 You are LedgerPilot's strict Accounts Payable Document Extractor.
@@ -97,12 +99,17 @@ class GeminiLLMService:
         self.client = genai.Client(api_key=self.settings.GEMINI_API_KEY)
 
     def _model_chain(self) -> list[str]:
-        candidates = [self.settings.GEMINI_MODEL.strip()]
-        for item in self.settings.GEMINI_FALLBACK_MODELS.split(","):
-            name = item.strip()
-            if name and name not in candidates:
+        raw_candidates = [self.settings.GEMINI_MODEL.strip()]
+        raw_candidates.extend(item.strip() for item in self.settings.GEMINI_FALLBACK_MODELS.split(","))
+        raw_candidates.extend(SAFE_GENERATIVE_FALLBACKS)
+
+        candidates: list[str] = []
+        for name in raw_candidates:
+            if not name or "embedding" in name.lower():
+                continue
+            if name not in candidates:
                 candidates.append(name)
-        return candidates
+        return candidates or [DEFAULT_GENERATIVE_MODEL]
 
     @retry(
         reraise=True,
@@ -140,9 +147,10 @@ class GeminiLLMService:
 
         last_error: Exception | None = None
         response = None
-        used_model = self.settings.GEMINI_MODEL
+        chain = self._model_chain()
+        used_model = chain[0]
 
-        for model_name in self._model_chain():
+        for model_name in chain:
             try:
                 response = self._call_generate(
                     model_name=model_name,
@@ -170,7 +178,7 @@ class GeminiLLMService:
 
         if response is None or not response.text:
             gemini_circuit.record_failure()
-            raise RuntimeError(f"All models in fallback chain failed ({self._model_chain()}): {last_error}")
+            raise RuntimeError(f"All models in fallback chain failed ({chain}): {last_error}")
 
         usage = response.usage_metadata
         input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
