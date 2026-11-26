@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Always resolves to C:\Projects\ledgerpilot regardless of working directory
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-DEFAULT_GENERATIVE_MODEL = "gemini-3.8-flash"
-DEFAULT_FALLBACK_MODELS = "gemini-3.6-flash,gemini-3.5-flash-lite"
+DEFAULT_GENERATIVE_MODEL = "gemini-4-hydrogen"
+DEFAULT_FALLBACK_MODELS = "gemini-3.8-flash,gemini-3.5-flash-lite"
 
 
 class Settings(BaseSettings):

@@ -1,6 +1,7 @@
 import asyncio
 import math
 import threading
+import time
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -9,7 +10,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.core.config import get_settings
+from app.core.config import DEFAULT_GENERATIVE_MODEL, get_settings
 from app.core.logging import get_logger
 from app.schemas.extraction import InvoiceExtraction, InvoiceExtractionLLM
 from app.schemas.rag import ContractComplianceLLM
@@ -19,15 +20,21 @@ logger = get_logger("ledgerpilot.llm")
 
 # Published Gemini API rates (USD per 1M tokens) for accurate operating-economics telemetry
 MODEL_RATES_USD_PER_1M: dict[str, tuple[Decimal, Decimal]] = {
+    "gemini-4-carbon": (Decimal("2.00"), Decimal("10.00")),
+    "gemini-4-neon": (Decimal("3.00"), Decimal("15.00")),
     "gemini-4-hydrogen": (Decimal("1.50"), Decimal("7.50")),
+    "gemini-4-argon": (Decimal("2.00"), Decimal("10.00")),
     "gemini-3.8-flash": (Decimal("0.75"), Decimal("3.75")),
     "gemini-3.6-flash": (Decimal("0.75"), Decimal("3.75")),
     "gemini-3.5-flash-lite": (Decimal("0.30"), Decimal("2.50")),
 }
-DEFAULT_RATES_USD_PER_1M = (Decimal("0.30"), Decimal("2.50"))
-FAST_DEFAULT_MODEL = "gemini-3.5-flash-lite"
-SAFE_GENERATIVE_FALLBACKS = ("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash")
-FAILOVER_STATUS_CODES = {404, 429, 500, 502, 503, 504}
+DEFAULT_RATES_USD_PER_1M = (Decimal("1.50"), Decimal("7.50"))
+SAFE_GENERATIVE_FALLBACKS = ("gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.5-flash-lite")
+FAILOVER_STATUS_CODES = {404, 408, 429, 500, 502, 503, 504}
+
+# Hard latency guardrails: 30s per API attempt, 75s max per LLM stage -> entire pipeline stays < 2 min
+PER_CALL_TIMEOUT_MS = 30_000
+STAGE_DEADLINE_SECONDS = 75.0
 
 _CLIENT_LOCK = threading.Lock()
 _SHARED_CLIENTS: dict[str, genai.Client] = {}
@@ -40,7 +47,10 @@ def _get_shared_client(api_key: str) -> genai.Client:
     with _CLIENT_LOCK:
         client = _SHARED_CLIENTS.get(api_key)
         if client is None:
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(timeout=PER_CALL_TIMEOUT_MS),
+            )
             _SHARED_CLIENTS[api_key] = client
         return client
 
@@ -107,15 +117,15 @@ def l2_normalize(vector: list[float]) -> list[float]:
 def _build_fast_thinking_config(model_name: str):
     """
     Sets lowest-latency thinking depth per Gemini model family:
-    - gemini-3.5-flash-lite & gemini-3.6-flash support 'minimal' (near-off thinking)
-    - gemini-3.8-flash & Gemini 4 models support 'low' as their fastest level
+    - gemini-4-* and gemini-3.8-flash: 'low' (overrides Gemini 4 Hydrogen's 'high' default)
+    - gemini-3.5-flash-lite & gemini-3.6-flash: 'minimal' (near-off thinking)
     """
     if not hasattr(types, "ThinkingConfig"):
         return None
     lower = model_name.lower()
     if "3.5-flash-lite" in lower or "3.6" in lower or "flash-lite" in lower or "3-flash" in lower:
         level = "minimal"
-    elif "3.8" in lower or "gemini-4" in lower:
+    elif "gemini-4" in lower or "3.8" in lower:
         level = "low"
     else:
         return None
@@ -127,9 +137,9 @@ def _build_fast_thinking_config(model_name: str):
 
 class GeminiLLMService:
     """
-    Production Gemini client with shared HTTP/2 connection pooling, strict JSON schemas,
-    low-latency thinking control, automatic model failover, circuit-breaker protection,
-    and FinOps cost telemetry.
+    Production Gemini 4 client with shared HTTP/2 connection pooling, strict 30s per-call
+    timeouts, low-latency thinking control, automatic model failover, circuit-breaker
+    protection, and FinOps cost telemetry.
     """
 
     def __init__(self) -> None:
@@ -149,14 +159,8 @@ class GeminiLLMService:
                 continue
             if name not in candidates:
                 candidates.append(name)
-        return candidates or [FAST_DEFAULT_MODEL]
+        return candidates or [DEFAULT_GENERATIVE_MODEL]
 
-    @retry(
-        reraise=True,
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=3),
-        retry=retry_if_exception_type(genai_errors.ServerError),
-    )
     def _call_generate(
         self,
         *,
@@ -206,8 +210,11 @@ class GeminiLLMService:
         response = None
         chain = self._model_chain()
         used_model = chain[0]
+        deadline = time.monotonic() + STAGE_DEADLINE_SECONDS
 
         for model_name in chain:
+            if time.monotonic() >= deadline:
+                break
             try:
                 response = self._call_generate(
                     model_name=model_name,
@@ -232,6 +239,13 @@ class GeminiLLMService:
                     )
                     continue
                 raise
+            except (TimeoutError, OSError) as exc:
+                last_error = exc
+                logger.warning(
+                    "llm_model_timeout_failover",
+                    extra={"extra_data": {"failed_model": model_name, "error": str(exc)}},
+                )
+                continue
 
         if response is None or not response.text:
             gemini_circuit.record_failure()
@@ -308,8 +322,8 @@ class GeminiLLMService:
 
     @retry(
         reraise=True,
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=3),
         retry=retry_if_exception_type(genai_errors.ServerError),
     )
     def _call_embed(self, texts: list[str]):
