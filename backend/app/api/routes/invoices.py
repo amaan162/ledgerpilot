@@ -22,6 +22,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.core.security import get_current_user, require_roles
 from app.db.models import (
     ActorType,
@@ -50,6 +51,7 @@ from app.services.file_security import FileSecurityError, validate_uploaded_docu
 from app.services.intake import ingest_invoice_bytes
 
 router = APIRouter(prefix="/api/v1", tags=["Invoices & Operations"])
+logger = get_logger("ledgerpilot.invoices")
 
 
 class FraudHoldRequest(BaseModel):
@@ -167,6 +169,18 @@ async def ingest_invoice(
         actor_id=current_user.email,
         idempotency_key=idempotency_key,
     )
+
+    # Self-heal ephemeral cloud disk if a duplicate upload matches an existing DB row whose file was wiped
+    stored_path_str = getattr(invoice, "file_path", None) or getattr(invoice, "storage_path", None)
+    if is_duplicate and stored_path_str:
+        stored_path = Path(stored_path_str)
+        if not stored_path.exists():
+            try:
+                stored_path.parent.mkdir(parents=True, exist_ok=True)
+                stored_path.write_bytes(raw_bytes)
+            except OSError as exc:
+                logger.warning("ephemeral_file_restore_failed", extra={"extra_data": {"error": str(exc)}})
+
     response.status_code = status.HTTP_200_OK if is_duplicate else status.HTTP_201_CREATED
     return InvoiceIngestResponse(
         duplicate=is_duplicate,
@@ -190,15 +204,49 @@ async def process_invoice(
     if not invoice:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
 
-    await run_invoice_workflow(invoice_id)
+    # Release the outer read transaction before the multi-second LangGraph workflow opens its own DB sessions
+    await db.rollback()
 
-    await db.refresh(invoice)
+    try:
+        await run_invoice_workflow(invoice_id)
+    except FileNotFoundError as exc:
+        logger.warning(
+            "invoice_file_missing_on_ephemeral_disk",
+            extra={"extra_data": {"invoice_id": str(invoice_id), "error": str(exc)}},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Uploaded PDF was cleared by a cloud server restart. Re-upload the PDF via Ingest Invoice to restore and process it.",
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "invoice_workflow_failed",
+            extra={
+                "extra_data": {
+                    "invoice_id": str(invoice_id),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Workflow failed ({type(exc).__name__}): {exc}",
+        ) from exc
+
+    db.expire_all()
+    refreshed = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
+    if not refreshed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found after processing.")
+
     logs = (
         await db.scalars(
             select(AuditLog).where(AuditLog.invoice_id == invoice_id).order_by(AuditLog.created_at.asc())
         )
     ).all()
-    detail = InvoiceDetailResponse.model_validate(invoice)
+    detail = InvoiceDetailResponse.model_validate(refreshed)
     detail.audit_logs = [AuditLogResponse.model_validate(log) for log in logs]
     return detail
 

@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes.approvals import router as approvals_router
 from app.api.routes.contracts import router as contracts_router
@@ -45,14 +46,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 @app.middleware("http")
 async def security_rate_limit_and_telemetry_middleware(request: Request, call_next):
@@ -60,12 +53,16 @@ async def security_rate_limit_and_telemetry_middleware(request: Request, call_ne
     token = correlation_id_ctx.set(corr_id)
     start = time.perf_counter()
 
-    # Enforce sliding-window rate limiting outside test runs (or when explicitly forced in tests)
+    # Never rate-limit CORS preflight requests
     force_rl = request.headers.get("X-Force-Rate-Limit") == "true"
     remaining_hdr: str | None = None
     limit_val = 60 if request.url.path.startswith(EXPENSIVE_PATH_PREFIXES) else 180
 
-    if request.url.path.startswith("/api/") and (settings.APP_ENV != "test" or force_rl):
+    if (
+        request.method != "OPTIONS"
+        and request.url.path.startswith("/api/")
+        and (settings.APP_ENV != "test" or force_rl)
+    ):
         bucket_key = extract_client_bucket_key(request)
         if request.url.path.startswith(EXPENSIVE_PATH_PREFIXES):
             bucket_key = f"{bucket_key}:expensive"
@@ -77,6 +74,25 @@ async def security_rate_limit_and_telemetry_middleware(request: Request, call_ne
 
     try:
         response = await call_next(request)
+    except Exception as exc:
+        logger.exception(
+            "unhandled_http_exception",
+            extra={
+                "extra_data": {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            },
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "detail": f"Backend error ({type(exc).__name__}): {exc}",
+                "correlation_id": corr_id,
+            },
+        )
     finally:
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         logger.info(
@@ -103,6 +119,17 @@ async def security_rate_limit_and_telemetry_middleware(request: Request, call_ne
 
     response.headers["X-Correlation-ID"] = corr_id
     return response
+
+
+# Registered LAST so CORSMiddleware is the OUTERMOST wrapper:
+# guarantees Access-Control-Allow-Origin on OPTIONS preflights, 429s, and 500 JSON errors.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/", tags=["System"])
