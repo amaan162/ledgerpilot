@@ -282,7 +282,6 @@ export default function CommandCenterPage() {
       const cacheKey = `lp-cache-v1:${persona.key}`;
       setSyncing(true);
 
-      // 1. Instant stale-while-revalidate hydration from local cache
       try {
         const raw = window.localStorage.getItem(cacheKey);
         if (raw) {
@@ -301,13 +300,11 @@ export default function CommandCenterPage() {
         // Ignore corrupt cache entries
       }
 
-      // 2. Auto-detect Render free-tier cold start if API hasn't replied after 2.5s
       const slowTimer = window.setTimeout(() => {
         setEngineStatus((curr) => (curr === "live" ? curr : "waking"));
       }, 2500);
 
       try {
-        // 3. Fire all 7 endpoints in parallel
         const [mRes, invRes, appRes, evRes, venRes, dlqRes, secRes] = await Promise.allSettled([
           api.getMetrics(persona.apiKey),
           api.listInvoices(persona.apiKey),
@@ -409,7 +406,7 @@ export default function CommandCenterPage() {
     [persona.apiKey, persona.key, pushToast]
   );
 
-  // Sequential /health polling (only 1 request in flight -> zero duplicate toasts)
+  // Sequential /health polling (zero duplicate toasts)
   useEffect(() => {
     if (engineStatus !== "waking") return;
     let cancelled = false;
@@ -998,9 +995,9 @@ export default function CommandCenterPage() {
         </div>
       </aside>
 
-      {/* Main Content Shell (z-10 cleanly above topo-backdrop) */}
+      {/* Main Content Shell */}
       <div className="relative z-10 lg:pl-[232px]">
-        {/* Top Specular Command Bar (z-30 so opaque popover sits above all workspace cards) */}
+        {/* Top Specular Command Bar */}
         <header className="sticky top-0 z-30 border-b border-slate-200/75 bg-white/75 backdrop-blur-2xl dark:border-slate-800/80 dark:bg-[#070b14]/80">
           <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2.5">
@@ -1131,7 +1128,7 @@ export default function CommandCenterPage() {
               className="space-y-5"
             >
               {/* ============================================================
-                  WORKSPACE 1: COMMAND (MNC Executive Overview)
+                  WORKSPACE 1: COMMAND (Strict 4 / 8 Architectural Grid)
                   ============================================================ */}
               {workspace === "command" && (
                 <>
@@ -1158,13 +1155,13 @@ export default function CommandCenterPage() {
                     </motion.button>
                   </div>
 
-                  {/* Row 1: Dial + 6 Interactive Distinctly Colored KPI Bento Cards */}
+                  {/* Row 1 (4 / 8): Dial + 6 Interactive Distinctly Colored KPI Cards */}
                   <section className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-12">
                     <div className="lg:col-span-4">
                       <FinOpsDialGauge metrics={metrics} evalScorecard={evalScorecard} />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-3 lg:col-span-8">
+                    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:col-span-8">
                       <KpiBento
                         label="Total Processed"
                         sub="Idempotent Ledger"
@@ -1256,7 +1253,7 @@ export default function CommandCenterPage() {
                     </div>
                   </section>
 
-                  {/* Row 2: Pixel-Aligned Ingestion Vault (Teal) + Recent Ledger Activity (Blue) */}
+                  {/* Row 2 (Aligned 4 / 8): Vault directly under Dial, Activity under KPIs */}
                   <section className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-12">
                     <SpotlightCard
                       tone="teal"
@@ -1266,29 +1263,29 @@ export default function CommandCenterPage() {
                       }}
                       onDragLeave={() => setIsDragging(false)}
                       onDrop={handleDrop}
-                      className={`flex flex-col justify-between p-5 lg:col-span-5 ${
+                      className={`flex flex-col justify-between p-5 lg:col-span-4 ${
                         isDragging
                           ? "border-teal-500 ring-2 ring-teal-500/35 shadow-[0_0_40px_-10px_rgba(20,184,166,0.55)]"
                           : ""
                       }`}
                     >
-                      <div className="min-h-[52px]">
+                      <div className="min-h-[46px]">
                         <div className="flex items-center justify-between gap-2">
                           <h2 className="text-sm font-bold text-slate-950 dark:text-white">
                             Invoice Ingestion Vault
                           </h2>
-                          <span className="rounded-md bg-teal-500/12 px-2 py-0.5 font-mono text-[10px] font-semibold text-teal-700 dark:text-teal-300">
-                            PDF / PNG / JPG
+                          <span className="shrink-0 rounded-md bg-teal-500/12 px-2 py-0.5 font-mono text-[10px] font-semibold text-teal-700 dark:text-teal-300">
+                            PDF / IMG
                           </span>
                         </div>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          Drop an invoice to run OWASP forensics, 3-way match, and policy routing.
+                        <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                          Forensics, 3-way match &amp; policy routing.
                         </p>
                       </div>
 
                       <div
                         onClick={() => fileInputRef.current?.click()}
-                        className="tactile-well group my-4 flex min-h-[172px] flex-1 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 px-4 py-7 text-center transition hover:border-teal-500/60 dark:border-slate-700"
+                        className="tactile-well group my-4 flex min-h-[176px] flex-1 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 px-4 py-7 text-center transition hover:border-teal-500/60 dark:border-slate-700"
                       >
                         <div className="mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/12 text-teal-600 transition-transform duration-200 group-hover:scale-110 dark:text-teal-400">
                           {busyAction === "upload" ? (
@@ -1300,17 +1297,15 @@ export default function CommandCenterPage() {
                         <div className="text-xs font-bold text-slate-900 dark:text-white">
                           {busyAction === "upload"
                             ? "Running live pipeline..."
-                            : "Drag & drop invoice or click to browse"}
+                            : "Drag & drop invoice or browse"}
                         </div>
                         <div className="mt-1 font-mono text-[10px] text-slate-500 dark:text-slate-400">
-                          SHA-256 idempotent deduplication enabled
+                          SHA-256 idempotent deduplication
                         </div>
                       </div>
 
                       <div className="flex items-center justify-between border-t border-slate-200/80 pt-3 text-xs dark:border-slate-800/80">
-                        <span className="text-slate-500 dark:text-slate-400">
-                          Evaluating without a PDF?
-                        </span>
+                        <span className="text-slate-500 dark:text-slate-400">No PDF handy?</span>
                         <button
                           type="button"
                           onClick={() => setSandboxOpen(true)}
@@ -1324,9 +1319,9 @@ export default function CommandCenterPage() {
 
                     <SpotlightCard
                       tone="blue"
-                      className="flex flex-col justify-between p-5 lg:col-span-7"
+                      className="flex flex-col justify-between p-5 lg:col-span-8"
                     >
-                      <div className="min-h-[52px]">
+                      <div className="min-h-[46px]">
                         <div className="flex items-center justify-between gap-2">
                           <h2 className="text-sm font-bold text-slate-950 dark:text-white">
                             Recent Ledger Activity
@@ -1334,20 +1329,20 @@ export default function CommandCenterPage() {
                           <button
                             type="button"
                             onClick={() => openLedgerWithFilter("ALL")}
-                            className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-blue-600 hover:underline dark:text-blue-400"
+                            className="inline-flex shrink-0 cursor-pointer items-center gap-1 text-xs font-semibold text-blue-600 hover:underline dark:text-blue-400"
                           >
                             View All ({invoices.length})
                             <ArrowUpRight className="h-3.5 w-3.5" />
                           </button>
                         </div>
-                        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                          Click any processed record to inspect forensics, citations, and ISO 20022
+                        <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                          Click any processed record to inspect forensics, citations &amp; ISO 20022
                           XML.
                         </p>
                       </div>
 
                       {invoices.length === 0 ? (
-                        <div className="tactile-well my-4 flex min-h-[172px] flex-1 flex-col items-center justify-center rounded-xl px-4 py-7 text-center">
+                        <div className="tactile-well my-4 flex min-h-[176px] flex-1 flex-col items-center justify-center rounded-xl px-4 py-7 text-center">
                           <div className="mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-500/12 text-blue-600 dark:text-blue-400">
                             <Sparkles className="h-5 w-5" />
                           </div>
@@ -1360,7 +1355,7 @@ export default function CommandCenterPage() {
                           </p>
                         </div>
                       ) : (
-                        <div className="my-4 min-h-[172px] flex-1 space-y-2">
+                        <div className="my-4 min-h-[176px] flex-1 space-y-2">
                           {invoices.slice(0, 4).map((inv) => (
                             <button
                               key={inv.id}
@@ -1415,11 +1410,11 @@ export default function CommandCenterPage() {
               )}
 
               {/* ============================================================
-                  WORKSPACE 2: LEDGER & AUDIT DOSSIER
+                  WORKSPACE 2: LEDGER & AUDIT DOSSIER (Equal-Height Columns)
                   ============================================================ */}
               {workspace === "ledger" && (
                 <section className="space-y-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-end justify-between gap-3">
                     <div>
                       <h1 className="text-xl font-bold tracking-tight text-slate-950 dark:text-white">
                         Invoice Ledger &amp; Audit Dossier
@@ -1431,19 +1426,20 @@ export default function CommandCenterPage() {
                     </div>
                     <motion.button
                       type="button"
+                      whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.96 }}
                       onClick={() => fileInputRef.current?.click()}
                       disabled={busyAction !== null}
-                      className="bento-card inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-slate-800 hover:text-sky-600 disabled:opacity-50 dark:text-slate-100 dark:hover:text-sky-300"
+                      className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white shadow-md shadow-slate-900/15 transition hover:bg-slate-800 disabled:opacity-50 dark:bg-sky-500 dark:text-slate-950 dark:shadow-sky-500/20 dark:hover:bg-sky-400"
                     >
-                      <FileUp className="h-3.5 w-3.5 text-sky-500" />
-                      Ingest PDF
+                      <FileUp className="h-3.5 w-3.5" />
+                      {busyAction === "upload" ? "Processing PDF..." : "Ingest PDF"}
                     </motion.button>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-                    <div className="lg:col-span-4">
-                      <SpotlightCard tone="indigo" className="p-4">
+                  <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-12">
+                    <div className="flex flex-col lg:col-span-4">
+                      <SpotlightCard tone="indigo" className="flex h-full flex-col p-4">
                         <div className="relative mb-3">
                           <Search className="pointer-events-none absolute top-2.5 left-3 h-3.5 w-3.5 text-slate-400" />
                           <input
@@ -1455,7 +1451,8 @@ export default function CommandCenterPage() {
                           />
                         </div>
 
-                        <div className="tactile-well mb-3 flex flex-wrap gap-1 rounded-xl p-1">
+                        {/* Even 5-column segmented filter bar */}
+                        <div className="tactile-well mb-3 grid grid-cols-5 gap-1 rounded-xl p-1">
                           {(
                             [
                               ["ALL", "All"],
@@ -1471,7 +1468,7 @@ export default function CommandCenterPage() {
                                 key={code}
                                 type="button"
                                 onClick={() => setStatusFilter(code)}
-                                className={`relative cursor-pointer rounded-lg px-2.5 py-1 text-[10px] font-semibold transition ${
+                                className={`relative cursor-pointer rounded-lg px-1 py-1 text-center text-[10px] font-semibold transition ${
                                   active
                                     ? "text-slate-950 dark:text-white"
                                     : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
@@ -1490,9 +1487,9 @@ export default function CommandCenterPage() {
                           })}
                         </div>
 
-                        <div className="max-h-[700px] space-y-2 overflow-y-auto pr-1">
+                        <div className="flex max-h-[700px] flex-1 flex-col space-y-2 overflow-y-auto pr-0.5">
                           {filteredInvoices.length === 0 ? (
-                            <div className="tactile-well flex flex-col items-center justify-center rounded-xl px-4 py-12 text-center">
+                            <div className="tactile-well flex min-h-[248px] flex-1 flex-col items-center justify-center rounded-xl px-4 py-10 text-center">
                               <FileText className="mb-2 h-5 w-5 text-slate-400" />
                               <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
                                 No Matching Invoices
@@ -1558,11 +1555,11 @@ export default function CommandCenterPage() {
                       </SpotlightCard>
                     </div>
 
-                    <div className="space-y-4 lg:col-span-8">
+                    <div className="flex flex-col space-y-4 lg:col-span-8">
                       {!selectedInvoice ? (
                         <SpotlightCard
                           tone="blue"
-                          className="flex min-h-[280px] flex-col items-center justify-center p-10 text-center"
+                          className="flex h-full min-h-[360px] flex-1 flex-col items-center justify-center p-10 text-center"
                         >
                           <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-500/12 text-blue-600 dark:text-blue-400">
                             <Activity className="h-5 w-5" />
@@ -1656,8 +1653,8 @@ export default function CommandCenterPage() {
                             </div>
                           </SpotlightCard>
 
-                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                            <SpotlightCard tone="rose" className="p-4">
+                          <div className="grid grid-cols-1 items-stretch gap-4 md:grid-cols-2">
+                            <SpotlightCard tone="rose" className="flex h-full flex-col p-4">
                               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
                                 <ShieldAlert className="h-4 w-4 text-rose-500" />
                                 PDF Forensics &amp; OWASP Guard
@@ -1710,7 +1707,7 @@ export default function CommandCenterPage() {
                               </div>
                             </SpotlightCard>
 
-                            <SpotlightCard tone="emerald" className="p-4">
+                            <SpotlightCard tone="emerald" className="flex h-full flex-col p-4">
                               <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
                                 <CheckCircle2 className="h-4 w-4 text-emerald-500" />
                                 Deterministic Decimal 3-Way Match
@@ -1879,7 +1876,7 @@ export default function CommandCenterPage() {
                   {approvals.length === 0 ? (
                     <SpotlightCard
                       tone="cyan"
-                      className="flex min-h-[260px] flex-col items-center justify-center p-10 text-center"
+                      className="flex min-h-[280px] flex-col items-center justify-center p-10 text-center"
                     >
                       <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-500/12 text-cyan-600 dark:text-cyan-400">
                         <CheckCircle2 className="h-5 w-5" />
@@ -2186,7 +2183,7 @@ export default function CommandCenterPage() {
 }
 
 /* ============================================================================
-   OpaquePersonaPopover — 100% Solid Enterprise RBAC Identity Switcher
+   OpaquePersonaPopover — Flush Trigger & Menu Width (Exact 312px Alignment)
    ============================================================================ */
 function initialsOf(name: string) {
   return name
@@ -2228,26 +2225,28 @@ function OpaquePersonaPopover({
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className="relative sm:w-[312px]">
       <motion.button
         type="button"
-        whileTap={{ scale: 0.97 }}
+        whileTap={{ scale: 0.985 }}
         onClick={() => setOpen((o) => !o)}
-        className="bento-card flex h-9 cursor-pointer items-center gap-2 rounded-xl px-2.5 text-left"
+        className="bento-card flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 text-left"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-linear-to-br from-sky-500/20 to-indigo-500/25 font-mono text-[10px] font-bold text-sky-700 ring-1 ring-sky-500/30 dark:text-sky-300">
-          {initialsOf(persona.label)}
-        </span>
-        <div className="hidden leading-tight sm:block">
-          <div className="text-xs font-semibold text-slate-900 dark:text-white">
-            {persona.label}
-          </div>
-          <div className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
-            {persona.roleTitle} &middot; {persona.limitLabel}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-sky-500/20 to-indigo-500/25 font-mono text-[10px] font-bold text-sky-700 ring-1 ring-sky-500/30 dark:text-sky-300">
+            {initialsOf(persona.label)}
+          </span>
+          <div className="hidden min-w-0 leading-tight sm:block">
+            <div className="truncate text-xs font-semibold text-slate-900 dark:text-white">
+              {persona.label}
+            </div>
+            <div className="truncate font-mono text-[10px] text-slate-500 dark:text-slate-400">
+              {persona.roleTitle} &middot; {persona.limitLabel}
+            </div>
           </div>
         </div>
         <ChevronDown
-          className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+          className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-200 ${
             open ? "rotate-180" : ""
           }`}
         />
@@ -2256,13 +2255,13 @@ function OpaquePersonaPopover({
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: 6, scale: 0.97 }}
+            initial={{ opacity: 0, y: 6, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 4, scale: 0.97 }}
+            exit={{ opacity: 0, y: 4, scale: 0.98 }}
             transition={{ type: "spring", stiffness: 480, damping: 34 }}
-            className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]"
+            className="absolute right-0 z-50 mt-2 w-[312px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] sm:w-full dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]"
           >
-            <div className="mb-1 flex items-center justify-between border-b border-slate-100 px-2.5 pt-1 pb-2 dark:border-slate-800">
+            <div className="mb-1 flex items-center justify-between border-b border-slate-100 px-2 pt-1 pb-2 dark:border-slate-800">
               <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                 Active RBAC Identity
               </span>
@@ -2282,13 +2281,13 @@ function OpaquePersonaPopover({
                       onSelect(p);
                       setOpen(false);
                     }}
-                    className={`flex w-full cursor-pointer items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors ${
+                    className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2 py-2 text-left transition-colors ${
                       active
                         ? "bg-sky-50 ring-1 ring-sky-500/35 dark:bg-sky-500/15 dark:ring-sky-400/35"
                         : "hover:bg-slate-100 dark:hover:bg-slate-800/90"
                     }`}
                   >
-                    <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[10px] font-bold ${
                           active
@@ -2308,7 +2307,7 @@ function OpaquePersonaPopover({
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
-                      <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9.5px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                         {p.limitLabel}
                       </span>
                       {active && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />}
