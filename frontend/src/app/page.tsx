@@ -11,6 +11,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
   Command,
   Copy,
@@ -60,7 +61,6 @@ import {
   CommandPalette,
   FinOpsDialGauge,
   LivePipelineRail,
-  PersonaPopover,
   SandboxDrawer,
   SpotlightCard,
   TactileThemeToggle,
@@ -247,6 +247,7 @@ export default function CommandCenterPage() {
       } else if (e.key === "Escape") {
         setPaletteOpen(false);
         setSandboxOpen(false);
+        setHoldModalOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -255,7 +256,10 @@ export default function CommandCenterPage() {
 
   const pushToast = useCallback((type: ToastItem["type"], title: string, detail?: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setToasts((prev) => [...prev.slice(-3), { id, type, title, detail }]);
+    setToasts((prev) => {
+      const deduped = prev.filter((t) => !(t.title === title && t.detail === detail));
+      return [...deduped.slice(-3), { id, type, title, detail }];
+    });
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5500);
@@ -278,7 +282,7 @@ export default function CommandCenterPage() {
       const cacheKey = `lp-cache-v1:${persona.key}`;
       setSyncing(true);
 
-      // 1. Instant stale-while-revalidate hydration from local cache (0ms perceived load)
+      // 1. Instant stale-while-revalidate hydration from local cache
       try {
         const raw = window.localStorage.getItem(cacheKey);
         if (raw) {
@@ -303,7 +307,7 @@ export default function CommandCenterPage() {
       }, 2500);
 
       try {
-        // 3. Fire all 7 endpoints in a single parallel batch (zero sequential waterfalls)
+        // 3. Fire all 7 endpoints in parallel
         const [mRes, invRes, appRes, evRes, venRes, dlqRes, secRes] = await Promise.allSettled([
           api.getMetrics(persona.apiKey),
           api.listInvoices(persona.apiKey),
@@ -316,7 +320,6 @@ export default function CommandCenterPage() {
 
         window.clearTimeout(slowTimer);
 
-        // If core endpoints failed, diagnose API error vs sleeping cloud instance
         const coreFailed = [mRes, invRes, appRes, evRes, venRes].find(
           (r): r is PromiseRejectedResult => r.status === "rejected"
         );
@@ -364,7 +367,6 @@ export default function CommandCenterPage() {
         setSecurityPosture(nextPosture);
         setPostureForbidden(nextPostureForbidden);
 
-        // Persist fresh snapshot for instant next visit
         try {
           const snapshot: WorkspaceCacheSnapshot = {
             metrics: m,
@@ -382,7 +384,6 @@ export default function CommandCenterPage() {
           // Ignore storage quota errors
         }
 
-        // Load selected invoice detail in background without blocking KPIs
         const targetId = selectId || selectedInvoiceIdRef.current || invList[0]?.id;
         if (targetId) {
           const detail = await api.getInvoiceDetail(persona.apiKey, targetId);
@@ -408,13 +409,20 @@ export default function CommandCenterPage() {
     [persona.apiKey, persona.key, pushToast]
   );
 
+  // Sequential /health polling (only 1 request in flight -> zero duplicate toasts)
   useEffect(() => {
     if (engineStatus !== "waking") return;
     let cancelled = false;
-    const poll = window.setInterval(async () => {
+    let timerId: number | undefined;
+
+    const checkHealth = async () => {
+      if (cancelled) return;
       setWakeAttempts((n) => n + 1);
       const healthy = await api.pingHealth();
-      if (healthy && !cancelled) {
+      if (cancelled) return;
+
+      if (healthy) {
+        cancelled = true;
         setEngineStatus("live");
         setWakeAttempts(0);
         pushToast(
@@ -423,11 +431,21 @@ export default function CommandCenterPage() {
           "Cloud API booted and synchronized live PostgreSQL state."
         );
         void loadWorkspace();
+        return;
       }
+
+      timerId = window.setTimeout(() => {
+        void checkHealth();
+      }, 4000);
+    };
+
+    timerId = window.setTimeout(() => {
+      void checkHealth();
     }, 4000);
+
     return () => {
       cancelled = true;
-      window.clearInterval(poll);
+      if (timerId !== undefined) window.clearTimeout(timerId);
     };
   }, [engineStatus, loadWorkspace, pushToast]);
 
@@ -869,7 +887,7 @@ export default function CommandCenterPage() {
             <motion.div
               whileHover={{ rotate: 6, scale: 1.05 }}
               transition={{ type: "spring", stiffness: 420, damping: 24 }}
-              className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500/20 via-sky-500/20 to-indigo-500/20 ring-1 ring-emerald-500/40 shadow-sm"
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-linear-to-br from-emerald-500/20 via-sky-500/20 to-indigo-500/20 ring-1 ring-emerald-500/40 shadow-sm"
             >
               <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
             </motion.div>
@@ -898,14 +916,14 @@ export default function CommandCenterPage() {
                   className={`group relative flex w-full cursor-pointer items-center justify-between rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors duration-150 ${
                     active
                       ? "text-slate-950 dark:text-white"
-                      : "text-slate-600 hover:bg-slate-900/[0.04] hover:text-slate-950 dark:text-slate-400 dark:hover:bg-white/[0.04] dark:hover:text-slate-100"
+                      : "text-slate-600 hover:bg-slate-900/4 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-white/4 dark:hover:text-slate-100"
                   }`}
                 >
                   {active && (
                     <motion.span
                       layoutId="desktopRailActive"
                       transition={{ type: "spring", stiffness: 620, damping: 46, mass: 0.7 }}
-                      className="pointer-events-none absolute inset-0 rounded-xl bg-slate-900/[0.06] ring-1 ring-slate-900/[0.08] dark:bg-white/[0.08] dark:ring-white/[0.1]"
+                      className="pointer-events-none absolute inset-0 rounded-xl bg-slate-900/6 ring-1 ring-slate-900/8 dark:bg-white/8 dark:ring-white/10"
                     />
                   )}
                   {active && (
@@ -955,10 +973,10 @@ export default function CommandCenterPage() {
             <button
               type="button"
               onClick={() => setSandboxOpen(true)}
-              className="group flex w-full cursor-pointer items-center justify-between rounded-xl border border-slate-200/80 bg-white/60 px-3 py-2.5 text-xs font-semibold text-slate-700 transition-colors duration-150 hover:border-cyan-500/40 hover:bg-cyan-500/[0.06] hover:text-slate-950 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-500/10 dark:hover:text-white"
+              className="group flex w-full cursor-pointer items-center justify-between rounded-xl border border-slate-200/80 bg-white/60 px-3 py-2.5 text-xs font-semibold text-slate-700 transition-colors duration-150 hover:border-cyan-500/40 hover:bg-cyan-500/6 hover:text-slate-950 dark:border-slate-800 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:border-cyan-500/40 dark:hover:bg-cyan-500/10 dark:hover:text-white"
             >
               <span className="flex items-center gap-2.5">
-                <FlaskConical className="h-4 w-4 text-cyan-600 transition-transform duration-200 group-hover:rotate-[-8deg] dark:text-cyan-400" />
+                <FlaskConical className="h-4 w-4 text-cyan-600 transition-transform duration-200 group-hover:-rotate-8 dark:text-cyan-400" />
                 Sandbox Simulator
               </span>
               <span className="rounded-md bg-cyan-500/12 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-cyan-700 dark:text-cyan-300">
@@ -982,8 +1000,8 @@ export default function CommandCenterPage() {
 
       {/* Main Content Shell (z-10 cleanly above topo-backdrop) */}
       <div className="relative z-10 lg:pl-[232px]">
-        {/* Top Specular Command Bar */}
-        <header className="sticky top-0 z-20 border-b border-slate-200/75 bg-white/70 backdrop-blur-2xl dark:border-slate-800/80 dark:bg-[#070b14]/75">
+        {/* Top Specular Command Bar (z-30 so opaque popover sits above all workspace cards) */}
+        <header className="sticky top-0 z-30 border-b border-slate-200/75 bg-white/75 backdrop-blur-2xl dark:border-slate-800/80 dark:bg-[#070b14]/80">
           <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2.5">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 ring-1 ring-emerald-500/35 lg:hidden">
@@ -1021,7 +1039,7 @@ export default function CommandCenterPage() {
                 <span className="hidden sm:inline">Sandbox</span>
               </button>
 
-              <PersonaPopover
+              <OpaquePersonaPopover
                 persona={persona}
                 personas={DEMO_PERSONAS}
                 onSelect={(found) => {
@@ -2058,7 +2076,7 @@ export default function CommandCenterPage() {
       </div>
 
       {/* Mobile Floating Bottom Dock */}
-      <nav className="fixed right-3 bottom-3 left-3 z-30 flex items-center justify-around rounded-2xl border border-slate-200/90 bg-white/85 p-1.5 shadow-xl backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/90 lg:hidden">
+      <nav className="fixed right-3 bottom-3 left-3 z-30 flex items-center justify-around rounded-2xl border border-slate-200/90 bg-white/90 p-1.5 shadow-xl backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/90 lg:hidden">
         {railItems.map((item) => {
           const active = workspace === item.id;
           const Icon = item.Icon;
@@ -2101,20 +2119,22 @@ export default function CommandCenterPage() {
         actions={paletteActions}
       />
 
-      {/* Manual Fraud Hold Modal */}
+      {/* Manual Fraud Hold Modal (100% Opaque) */}
       <AnimatePresence>
         {holdModalOpen && selectedInvoice && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            onClick={() => setHoldModalOpen(false)}
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
           >
             <motion.div
               initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.94, opacity: 0 }}
-              className="bento-card w-full max-w-md rounded-2xl border-rose-500/40 bg-white p-5 shadow-2xl dark:bg-slate-900"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md rounded-2xl border border-rose-500/45 bg-white p-5 shadow-2xl dark:bg-[#0d1321]"
             >
               <div className="flex items-center gap-2 text-rose-600 dark:text-rose-300">
                 <ShieldBan className="h-5 w-5" />
@@ -2140,7 +2160,7 @@ export default function CommandCenterPage() {
                 <button
                   type="button"
                   onClick={() => setHoldModalOpen(false)}
-                  className="bento-card cursor-pointer rounded-xl px-3.5 py-1.5 text-xs font-medium text-slate-700 dark:text-slate-300"
+                  className="cursor-pointer rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
                 >
                   Cancel
                 </button>
@@ -2161,6 +2181,145 @@ export default function CommandCenterPage() {
 
       {/* Floating Toast Stack */}
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
+    </div>
+  );
+}
+
+/* ============================================================================
+   OpaquePersonaPopover — 100% Solid Enterprise RBAC Identity Switcher
+   ============================================================================ */
+function initialsOf(name: string) {
+  return name
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function OpaquePersonaPopover({
+  persona,
+  personas,
+  onSelect,
+}: {
+  persona: Persona;
+  personas: Persona[];
+  onSelect: (p: Persona) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onOutside);
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      window.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("keydown", onEsc);
+    };
+  }, [open]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <motion.button
+        type="button"
+        whileTap={{ scale: 0.97 }}
+        onClick={() => setOpen((o) => !o)}
+        className="bento-card flex h-9 cursor-pointer items-center gap-2 rounded-xl px-2.5 text-left"
+      >
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-linear-to-br from-sky-500/20 to-indigo-500/25 font-mono text-[10px] font-bold text-sky-700 ring-1 ring-sky-500/30 dark:text-sky-300">
+          {initialsOf(persona.label)}
+        </span>
+        <div className="hidden leading-tight sm:block">
+          <div className="text-xs font-semibold text-slate-900 dark:text-white">
+            {persona.label}
+          </div>
+          <div className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
+            {persona.roleTitle} &middot; {persona.limitLabel}
+          </div>
+        </div>
+        <ChevronDown
+          className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 6, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.97 }}
+            transition={{ type: "spring", stiffness: 480, damping: 34 }}
+            className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]"
+          >
+            <div className="mb-1 flex items-center justify-between border-b border-slate-100 px-2.5 pt-1 pb-2 dark:border-slate-800">
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                Active RBAC Identity
+              </span>
+              <span className="rounded bg-sky-500/12 px-1.5 py-0.5 font-mono text-[9px] font-bold text-sky-700 dark:text-sky-300">
+                SOX 404
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              {personas.map((p) => {
+                const active = p.key === persona.key;
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => {
+                      onSelect(p);
+                      setOpen(false);
+                    }}
+                    className={`flex w-full cursor-pointer items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors ${
+                      active
+                        ? "bg-sky-50 ring-1 ring-sky-500/35 dark:bg-sky-500/15 dark:ring-sky-400/35"
+                        : "hover:bg-slate-100 dark:hover:bg-slate-800/90"
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <span
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[10px] font-bold ${
+                          active
+                            ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                            : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                        }`}
+                      >
+                        {initialsOf(p.label)}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-slate-950 dark:text-white">
+                          {p.label}
+                        </div>
+                        <div className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                          {p.roleTitle}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                        {p.limitLabel}
+                      </span>
+                      {active && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
