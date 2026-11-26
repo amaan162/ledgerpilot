@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   BookOpen,
   Building2,
@@ -54,8 +54,15 @@ export function VendorContractHub({
         setVendorMenuOpen(false);
       }
     };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setVendorMenuOpen(false);
+    };
     window.addEventListener("mousedown", onOutside);
-    return () => window.removeEventListener("mousedown", onOutside);
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      window.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("keydown", onEsc);
+    };
   }, [vendorMenuOpen]);
 
   const handleSearch = async (overrideQuery?: string, overrideCode?: string) => {
@@ -93,7 +100,7 @@ export function VendorContractHub({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="grid grid-cols-1 items-stretch gap-3 md:grid-cols-2">
           {vendors.map((v, idx) => {
             const isSelected = activeVendorCode === v.vendor_code;
             const tone = VENDOR_TONES[idx % VENDOR_TONES.length];
@@ -103,7 +110,7 @@ export function VendorContractHub({
                 asButton
                 tone={tone}
                 onClick={() => setSelectedCode(v.vendor_code)}
-                className={`p-4 ${
+                className={`flex h-full flex-col justify-between p-4 ${
                   isSelected ? "border-sky-500/60 ring-1 ring-sky-500/30" : ""
                 }`}
               >
@@ -147,8 +154,8 @@ export function VendorContractHub({
         </div>
       </SpotlightCard>
 
-      {/* Live pgvector Hybrid Contract RAG Playground */}
-      <SpotlightCard tone="indigo" className="overflow-visible p-5">
+      {/* Live pgvector Hybrid Contract RAG Playground (allowOverflow prevents dropdown clipping) */}
+      <SpotlightCard tone="indigo" allowOverflow className="z-20 p-5">
         <div className="mb-4">
           <h2 className="flex items-center gap-2 text-sm font-bold text-slate-950 dark:text-white">
             <BookOpen className="h-4 w-4 text-indigo-500" />
@@ -165,34 +172,28 @@ export function VendorContractHub({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Custom Frosted Vendor Selector */}
-          <div ref={menuRef} className="relative">
+          {/* Custom Opaque, Flush 300px, Zero-Snap Vendor Selector */}
+          <div ref={menuRef} className="relative w-full sm:w-[300px]">
             <button
               type="button"
               onClick={() => setVendorMenuOpen((o) => !o)}
-              className="tactile-well flex h-9 cursor-pointer items-center gap-2 rounded-xl px-3 font-mono text-xs font-semibold text-slate-800 transition hover:border-indigo-500/45 dark:text-slate-100"
+              className="tactile-well flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-3 font-mono text-xs font-semibold text-slate-800 transition-colors hover:border-indigo-500/45 dark:text-slate-100"
             >
-              <span className="max-w-[210px] truncate">
+              <span className="truncate leading-4">
                 {activeVendor
                   ? `${activeVendor.vendor_code} \u2014 ${activeVendor.legal_name}`
                   : activeVendorCode}
               </span>
               <ChevronDown
-                className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-200 ${
+                className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150 ${
                   vendorMenuOpen ? "rotate-180" : ""
                 }`}
               />
             </button>
 
-            <AnimatePresence>
-              {vendorMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-                  className="absolute left-0 z-50 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]"
-                >
+            {vendorMenuOpen && (
+              <div className="popover-surface absolute left-0 z-50 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]">
+                <div className="space-y-1">
                   {vendors.map((v) => {
                     const selected = v.vendor_code === activeVendorCode;
                     return (
@@ -219,9 +220,10 @@ export function VendorContractHub({
                       </button>
                     );
                   })}
-                </motion.div>
-              )}
-            </AnimatePresence>
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="relative min-w-[260px] flex-1">
             <Search className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-slate-400" />
@@ -237,17 +239,15 @@ export function VendorContractHub({
             />
           </div>
 
-          <motion.button
+          <button
             type="button"
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.96 }}
             disabled={searching}
             onClick={() => void handleSearch()}
-            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-xs font-semibold text-white shadow-sm transition hover:bg-indigo-500 disabled:opacity-50"
+            className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500 active:opacity-90 disabled:opacity-50"
           >
             <Sparkles className="h-3.5 w-3.5" />
             {searching ? "Searching..." : "Search MSA Clauses"}
-          </motion.button>
+          </button>
         </div>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -259,7 +259,7 @@ export function VendorContractHub({
                 setQuery(sq);
                 void handleSearch(sq);
               }}
-              className="tactile-well cursor-pointer rounded-full px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-indigo-500/45 hover:text-indigo-700 dark:text-slate-400 dark:hover:text-indigo-300"
+              className="tactile-well cursor-pointer rounded-full px-3 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-indigo-500/45 hover:text-indigo-700 dark:text-slate-400 dark:hover:text-indigo-300"
             >
               {sq}
             </button>
@@ -268,9 +268,9 @@ export function VendorContractHub({
 
         {searchResult && (
           <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.2 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.16 }}
             className="mt-5 space-y-3"
           >
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -294,16 +294,10 @@ export function VendorContractHub({
               </span>
             </div>
 
-            {searchResult.results.map((hit, idx) => {
+            {searchResult.results.map((hit) => {
               const pct = Math.round(hit.similarity_score * 100);
               return (
-                <motion.div
-                  key={hit.chunk_id}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.05 }}
-                  className="tactile-well rounded-xl p-3.5"
-                >
+                <div key={hit.chunk_id} className="tactile-well rounded-xl p-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="flex items-center gap-2 font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300">
                       <Landmark className="h-3.5 w-3.5" />[{hit.citation_id}] {hit.document_name}{" "}
@@ -314,8 +308,8 @@ export function VendorContractHub({
                         <motion.div
                           initial={{ width: 0 }}
                           animate={{ width: `${pct}%` }}
-                          transition={{ duration: 0.45, ease: "easeOut" }}
-                          className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-emerald-400"
+                          transition={{ duration: 0.4, ease: "easeOut" }}
+                          className="h-full rounded-full bg-linear-to-r from-indigo-500 to-emerald-400"
                         />
                       </div>
                       <span className="font-mono text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
@@ -326,7 +320,7 @@ export function VendorContractHub({
                   <p className="mt-2 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
                     {hit.excerpt}
                   </p>
-                </motion.div>
+                </div>
               );
             })}
           </motion.div>

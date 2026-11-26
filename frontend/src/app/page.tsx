@@ -406,7 +406,7 @@ export default function CommandCenterPage() {
     [persona.apiKey, persona.key, pushToast]
   );
 
-  // Sequential /health polling (zero duplicate toasts)
+  // Sequential /health polling (only 1 request in flight -> zero duplicate toasts)
   useEffect(() => {
     if (engineStatus !== "waking") return;
     let cancelled = false;
@@ -997,8 +997,12 @@ export default function CommandCenterPage() {
 
       {/* Main Content Shell */}
       <div className="relative z-10 lg:pl-[232px]">
-        {/* Top Specular Command Bar */}
-        <header className="sticky top-0 z-30 border-b border-slate-200/75 bg-white/75 backdrop-blur-2xl dark:border-slate-800/80 dark:bg-[#070b14]/80">
+        {/* Top Command Bar — backdrop blur isolated onto sibling layer so popovers never snap */}
+        <header className="sticky top-0 z-30">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 -z-10 border-b border-slate-200/75 bg-white/75 backdrop-blur-2xl dark:border-slate-800/80 dark:bg-[#070b14]/80"
+          />
           <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2.5">
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 ring-1 ring-emerald-500/35 lg:hidden">
@@ -1049,16 +1053,15 @@ export default function CommandCenterPage() {
                 }}
               />
 
-              <motion.button
+              <button
                 type="button"
-                whileTap={{ scale: 0.92 }}
                 onClick={() => void loadWorkspace()}
                 aria-label="Sync live state"
                 title="Sync Live PostgreSQL State"
-                className="bento-card inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl text-slate-600 hover:text-slate-950 dark:text-slate-300 dark:hover:text-white"
+                className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border border-slate-200/90 bg-white/90 text-slate-600 shadow-xs transition-colors hover:border-slate-300 hover:text-slate-950 active:opacity-80 dark:border-slate-700/80 dark:bg-slate-900/90 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin text-sky-500" : ""}`} />
-              </motion.button>
+              </button>
 
               <TactileThemeToggle theme={theme} onToggle={toggleTheme} />
             </div>
@@ -1105,9 +1108,10 @@ export default function CommandCenterPage() {
           <AnimatePresence>
             {busyAction && (
               <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.16 }}
               >
                 <LivePipelineRail
                   activeStageIdx={liveStageIdx}
@@ -1117,14 +1121,14 @@ export default function CommandCenterPage() {
             )}
           </AnimatePresence>
 
-          {/* Active Workspace Views */}
+          {/* Active Workspace Views (Pure opacity fade — zero full-page transform snap) */}
           <AnimatePresence mode="wait">
             <motion.div
               key={workspace}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.14, ease: "easeOut" }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
               className="space-y-5"
             >
               {/* ============================================================
@@ -1142,17 +1146,15 @@ export default function CommandCenterPage() {
                         settlement staging.
                       </p>
                     </div>
-                    <motion.button
+                    <button
                       type="button"
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.96 }}
                       disabled={busyAction !== null}
                       onClick={() => fileInputRef.current?.click()}
-                      className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white shadow-md shadow-slate-900/15 transition hover:bg-slate-800 disabled:opacity-50 dark:bg-sky-500 dark:text-slate-950 dark:shadow-sky-500/20 dark:hover:bg-sky-400"
+                      className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white shadow-md shadow-slate-900/15 transition-colors hover:bg-slate-800 active:opacity-90 disabled:opacity-50 dark:bg-sky-500 dark:text-slate-950 dark:shadow-sky-500/20 dark:hover:bg-sky-400"
                     >
                       <FileUp className="h-3.5 w-3.5" />
                       {busyAction === "upload" ? "Processing PDF..." : "Ingest Invoice"}
-                    </motion.button>
+                    </button>
                   </div>
 
                   {/* Row 1 (4 / 8): Dial + 6 Interactive Distinctly Colored KPI Cards */}
@@ -1287,7 +1289,7 @@ export default function CommandCenterPage() {
                         onClick={() => fileInputRef.current?.click()}
                         className="tactile-well group my-4 flex min-h-[176px] flex-1 cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 px-4 py-7 text-center transition hover:border-teal-500/60 dark:border-slate-700"
                       >
-                        <div className="mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/12 text-teal-600 transition-transform duration-200 group-hover:scale-110 dark:text-teal-400">
+                        <div className="mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl bg-teal-500/12 text-teal-600 transition-colors dark:text-teal-400">
                           {busyAction === "upload" ? (
                             <Loader2 className="h-5 w-5 animate-spin" />
                           ) : (
@@ -1424,17 +1426,15 @@ export default function CommandCenterPage() {
                         HMAC-sealed audit trail.
                       </p>
                     </div>
-                    <motion.button
+                    <button
                       type="button"
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.96 }}
                       onClick={() => fileInputRef.current?.click()}
                       disabled={busyAction !== null}
-                      className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white shadow-md shadow-slate-900/15 transition hover:bg-slate-800 disabled:opacity-50 dark:bg-sky-500 dark:text-slate-950 dark:shadow-sky-500/20 dark:hover:bg-sky-400"
+                      className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white shadow-md shadow-slate-900/15 transition-colors hover:bg-slate-800 active:opacity-90 disabled:opacity-50 dark:bg-sky-500 dark:text-slate-950 dark:shadow-sky-500/20 dark:hover:bg-sky-400"
                     >
                       <FileUp className="h-3.5 w-3.5" />
                       {busyAction === "upload" ? "Processing PDF..." : "Ingest PDF"}
-                    </motion.button>
+                    </button>
                   </div>
 
                   <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-12">
@@ -1451,7 +1451,6 @@ export default function CommandCenterPage() {
                           />
                         </div>
 
-                        {/* Even 5-column segmented filter bar */}
                         <div className="tactile-well mb-3 grid grid-cols-5 gap-1 rounded-xl p-1">
                           {(
                             [
@@ -1468,7 +1467,7 @@ export default function CommandCenterPage() {
                                 key={code}
                                 type="button"
                                 onClick={() => setStatusFilter(code)}
-                                className={`relative cursor-pointer rounded-lg px-1 py-1 text-center text-[10px] font-semibold transition ${
+                                className={`relative cursor-pointer rounded-lg px-1 py-1 text-center text-[10px] font-semibold transition-colors ${
                                   active
                                     ? "text-slate-950 dark:text-white"
                                     : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
@@ -1502,12 +1501,11 @@ export default function CommandCenterPage() {
                             filteredInvoices.map((inv) => {
                               const active = selectedInvoice?.id === inv.id;
                               return (
-                                <motion.button
+                                <button
                                   key={inv.id}
                                   type="button"
-                                  whileTap={{ scale: 0.99 }}
                                   onClick={() => void handleSelectInvoice(inv.id)}
-                                  className={`w-full cursor-pointer rounded-xl border p-3 text-left transition ${
+                                  className={`w-full cursor-pointer rounded-xl border p-3 text-left transition-colors ${
                                     active
                                       ? "border-indigo-500/60 bg-indigo-500/8 shadow-[0_0_24px_-12px_rgba(99,102,241,0.5)] dark:bg-indigo-500/12"
                                       : "border-slate-200/80 bg-white/70 hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-950/60 dark:hover:border-slate-700"
@@ -1547,7 +1545,7 @@ export default function CommandCenterPage() {
                                       ))}
                                     </div>
                                   )}
-                                </motion.button>
+                                </button>
                               );
                             })
                           )}
@@ -1583,9 +1581,9 @@ export default function CommandCenterPage() {
                       ) : (
                         <motion.div
                           key={selectedInvoice.id}
-                          initial={{ opacity: 0, y: 8 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{ duration: 0.18 }}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ duration: 0.14 }}
                           className="space-y-4"
                         >
                           <SpotlightCard tone="blue" className="p-5">
@@ -1621,28 +1619,26 @@ export default function CommandCenterPage() {
                                 <div className="flex flex-wrap items-center justify-end gap-2">
                                   {(selectedInvoice.status === "RECEIVED" ||
                                     selectedInvoice.status === "FAILED") && (
-                                    <motion.button
+                                    <button
                                       type="button"
-                                      whileTap={{ scale: 0.95 }}
                                       disabled={busyAction !== null}
                                       onClick={() => void handleRetryInvoice(selectedInvoice.id)}
                                       className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/12 px-3 py-1.5 text-[11px] font-semibold text-sky-700 transition hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-200"
                                     >
                                       <RotateCcw className="h-3.5 w-3.5" />
                                       Run / Retry Pipeline
-                                    </motion.button>
+                                    </button>
                                   )}
                                   {selectedInvoice.status !== "PAYMENT_STAGED" &&
                                     selectedInvoice.status !== "QUARANTINED_FRAUD_RISK" && (
-                                      <motion.button
+                                      <button
                                         type="button"
-                                        whileTap={{ scale: 0.95 }}
                                         onClick={() => setHoldModalOpen(true)}
                                         className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-500/20 dark:text-rose-300"
                                       >
                                         <ShieldBan className="h-3.5 w-3.5" />
                                         Place Manual Fraud Hold
-                                      </motion.button>
+                                      </button>
                                     )}
                                 </div>
                               </div>
@@ -1788,11 +1784,10 @@ export default function CommandCenterPage() {
                                   Bank-Ready ISO 20022 (pain.001.001.03) Wire Instruction
                                 </div>
                                 <div className="flex items-center gap-2">
-                                  <motion.button
+                                  <button
                                     type="button"
-                                    whileTap={{ scale: 0.94 }}
                                     onClick={() => void handleCopyXml()}
-                                    className="bento-card inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200"
+                                    className="bento-card inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-700 active:opacity-80 dark:text-slate-200"
                                   >
                                     {copiedXml ? (
                                       <Check className="h-3.5 w-3.5 text-emerald-500" />
@@ -1800,16 +1795,15 @@ export default function CommandCenterPage() {
                                       <Copy className="h-3.5 w-3.5" />
                                     )}
                                     {copiedXml ? "Copied" : "Copy XML"}
-                                  </motion.button>
-                                  <motion.button
+                                  </button>
+                                  <button
                                     type="button"
-                                    whileTap={{ scale: 0.94 }}
                                     onClick={handleDownloadXml}
-                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-500/25 dark:text-emerald-200"
+                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-500/25 active:opacity-80 dark:text-emerald-200"
                                   >
                                     <Download className="h-3.5 w-3.5" />
                                     Download XML
-                                  </motion.button>
+                                  </button>
                                 </div>
                               </div>
                               <pre className="max-h-60 overflow-auto rounded-xl border border-slate-200 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-emerald-300 dark:border-slate-800">
@@ -1888,15 +1882,14 @@ export default function CommandCenterPage() {
                         Zero invoices are paused awaiting human sign-off. Trigger a live threshold
                         breach to test PostgreSQL checkpoint resumption.
                       </p>
-                      <motion.button
+                      <button
                         type="button"
-                        whileTap={{ scale: 0.96 }}
                         onClick={() => void handleRunPreset("hitl_manager")}
                         className="mt-4 inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-cyan-500/35 bg-cyan-500/12 px-3.5 py-2 text-xs font-semibold text-cyan-700 transition hover:bg-cyan-500/20 dark:text-cyan-300"
                       >
                         <FlaskConical className="h-3.5 w-3.5" />
                         Run Manager HITL Pause ($4,800)
-                      </motion.button>
+                      </button>
                     </SpotlightCard>
                   ) : (
                     approvals.map((req) => (
@@ -1933,16 +1926,15 @@ export default function CommandCenterPage() {
 
                           <div className="flex items-center gap-3">
                             {req.status === "PENDING" && (
-                              <motion.button
+                              <button
                                 type="button"
-                                whileTap={{ scale: 0.95 }}
                                 disabled={busyAction !== null}
                                 onClick={() => void handleEscalateSla(req)}
                                 className="inline-flex cursor-pointer items-center gap-1 rounded-xl border border-amber-500/40 bg-amber-500/12 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-500/20 disabled:opacity-50 dark:text-amber-300"
                               >
                                 <AlertTriangle className="h-3.5 w-3.5" />
                                 Simulate SLA Breach
-                              </motion.button>
+                              </button>
                             )}
                             <button
                               type="button"
@@ -1965,28 +1957,24 @@ export default function CommandCenterPage() {
                             }
                             className="tactile-well min-w-[260px] flex-1 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-sky-500 focus:outline-none dark:text-slate-100 dark:placeholder:text-slate-500"
                           />
-                          <motion.button
+                          <button
                             type="button"
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.95 }}
                             disabled={busyAction !== null}
                             onClick={() => void handleApprovalDecision(req, "APPROVED")}
-                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition hover:bg-emerald-500 disabled:opacity-50"
+                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition-colors hover:bg-emerald-500 active:opacity-90 disabled:opacity-50"
                           >
                             <CheckCircle2 className="h-4 w-4" />
                             Approve &amp; Stage Wire
-                          </motion.button>
-                          <motion.button
+                          </button>
+                          <button
                             type="button"
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.95 }}
                             disabled={busyAction !== null}
                             onClick={() => void handleApprovalDecision(req, "REJECTED")}
-                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-rose-500 disabled:opacity-50"
+                            className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-50"
                           >
                             <XCircle className="h-4 w-4" />
                             Reject Invoice
-                          </motion.button>
+                          </button>
                         </div>
                       </SpotlightCard>
                     ))
@@ -2116,66 +2104,56 @@ export default function CommandCenterPage() {
         actions={paletteActions}
       />
 
-      {/* Manual Fraud Hold Modal (100% Opaque) */}
-      <AnimatePresence>
-        {holdModalOpen && selectedInvoice && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setHoldModalOpen(false)}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+      {/* Manual Fraud Hold Modal (100% Opaque, Permanent GPU Layer — Zero Snap) */}
+      {holdModalOpen && selectedInvoice && (
+        <div
+          onClick={() => setHoldModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-surface w-full max-w-md rounded-2xl border border-rose-500/45 bg-white p-5 shadow-2xl dark:bg-[#0d1321]"
           >
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 6 }}
-              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-md rounded-2xl border border-rose-500/45 bg-white p-5 shadow-2xl dark:bg-[#0d1321]"
-            >
-              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-300">
-                <ShieldBan className="h-5 w-5" />
-                <h3 className="text-sm font-bold">Place Manual Fraud Quarantine Hold</h3>
-              </div>
-              <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
-                Locks{" "}
-                <strong className="font-mono text-slate-950 dark:text-white">
-                  {selectedInvoice.invoice_number || selectedInvoice.original_filename}
-                </strong>{" "}
-                into <code className="text-rose-600 dark:text-rose-300">QUARANTINED_FRAUD_RISK</code>{" "}
-                and writes an immutable HMAC-sealed audit record under{" "}
-                <strong>{persona.label}</strong> ({persona.roleTitle}).
-              </p>
-              <textarea
-                rows={3}
-                value={holdReason}
-                onChange={(e) => setHoldReason(e.target.value)}
-                placeholder="Enter forensic reason (min 5 characters)..."
-                className="tactile-well mt-3 w-full rounded-xl p-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-rose-500 focus:outline-none dark:text-slate-100 dark:placeholder:text-slate-500"
-              />
-              <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setHoldModalOpen(false)}
-                  className="cursor-pointer rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                >
-                  Cancel
-                </button>
-                <motion.button
-                  type="button"
-                  whileTap={{ scale: 0.95 }}
-                  disabled={holdReason.trim().length < 5 || busyAction !== null}
-                  onClick={() => void handleConfirmFraudHold()}
-                  className="cursor-pointer rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 disabled:opacity-40"
-                >
-                  Confirm Quarantine
-                </motion.button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            <div className="flex items-center gap-2 text-rose-600 dark:text-rose-300">
+              <ShieldBan className="h-5 w-5" />
+              <h3 className="text-sm font-bold">Place Manual Fraud Quarantine Hold</h3>
+            </div>
+            <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+              Locks{" "}
+              <strong className="font-mono text-slate-950 dark:text-white">
+                {selectedInvoice.invoice_number || selectedInvoice.original_filename}
+              </strong>{" "}
+              into <code className="text-rose-600 dark:text-rose-300">QUARANTINED_FRAUD_RISK</code>{" "}
+              and writes an immutable HMAC-sealed audit record under{" "}
+              <strong>{persona.label}</strong> ({persona.roleTitle}).
+            </p>
+            <textarea
+              rows={3}
+              value={holdReason}
+              onChange={(e) => setHoldReason(e.target.value)}
+              placeholder="Enter forensic reason (min 5 characters)..."
+              className="tactile-well mt-3 w-full rounded-xl p-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-rose-500 focus:outline-none dark:text-slate-100 dark:placeholder:text-slate-500"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setHoldModalOpen(false)}
+                className="cursor-pointer rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={holdReason.trim().length < 5 || busyAction !== null}
+                onClick={() => void handleConfirmFraudHold()}
+                className="cursor-pointer rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
+              >
+                Confirm Quarantine
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Toast Stack */}
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
@@ -2184,7 +2162,7 @@ export default function CommandCenterPage() {
 }
 
 /* ============================================================================
-   OpaquePersonaPopover — Flush Trigger & Menu Width (Exact 312px Alignment)
+   OpaquePersonaPopover — Flush 312px Width + Permanent GPU Layer (Zero Snap)
    ============================================================================ */
 function initialsOf(name: string) {
   return name
@@ -2230,7 +2208,7 @@ function OpaquePersonaPopover({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="bento-card flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 text-left active:opacity-90"
+        className="flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-white/95 px-2.5 text-left shadow-xs transition-colors hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/95 dark:hover:border-slate-600"
       >
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-sky-500/20 to-indigo-500/25 font-mono text-[10px] font-bold text-sky-700 ring-1 ring-sky-500/30 dark:text-sky-300">
@@ -2252,73 +2230,65 @@ function OpaquePersonaPopover({
         />
       </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute right-0 z-50 mt-2 w-[312px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] sm:w-full dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]"
-          >
-            <div className="mb-1 flex items-center justify-between border-b border-slate-100 px-2 pt-1 pb-2 dark:border-slate-800">
-              <span className="font-mono text-[10px] leading-4 font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                Active RBAC Identity
-              </span>
-              <span className="rounded bg-sky-500/12 px-1.5 py-0.5 font-mono text-[9px] leading-3 font-bold text-sky-700 dark:text-sky-300">
-                SOX 404
-              </span>
-            </div>
+      {open && (
+        <div className="popover-surface absolute right-0 z-50 mt-2 w-[312px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] sm:w-full dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]">
+          <div className="mb-1 flex items-center justify-between border-b border-slate-100 px-2 pt-1 pb-2 dark:border-slate-800">
+            <span className="font-mono text-[10px] leading-4 font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Active RBAC Identity
+            </span>
+            <span className="rounded bg-sky-500/12 px-1.5 py-0.5 font-mono text-[9px] leading-3 font-bold text-sky-700 dark:text-sky-300">
+              SOX 404
+            </span>
+          </div>
 
-            <div className="space-y-1">
-              {personas.map((p) => {
-                const active = p.key === persona.key;
-                return (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => {
-                      onSelect(p);
-                      setOpen(false);
-                    }}
-                    className={`flex h-12 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2 text-left transition-colors ${
-                      active
-                        ? "bg-sky-50 ring-1 ring-sky-500/35 dark:bg-sky-500/15 dark:ring-sky-400/35"
-                        : "hover:bg-slate-100 dark:hover:bg-slate-800/90"
-                    }`}
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span
-                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[10px] font-bold ${
-                          active
-                            ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
-                            : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                        }`}
-                      >
-                        {initialsOf(p.label)}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-xs leading-4 font-semibold text-slate-950 dark:text-white">
-                          {p.label}
-                        </div>
-                        <div className="truncate text-[11px] leading-4 text-slate-500 dark:text-slate-400">
-                          {p.roleTitle}
-                        </div>
+          <div className="space-y-1">
+            {personas.map((p) => {
+              const active = p.key === persona.key;
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => {
+                    onSelect(p);
+                    setOpen(false);
+                  }}
+                  className={`flex h-12 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2 text-left transition-colors ${
+                    active
+                      ? "bg-sky-50 ring-1 ring-sky-500/35 dark:bg-sky-500/15 dark:ring-sky-400/35"
+                      : "hover:bg-slate-100 dark:hover:bg-slate-800/90"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[10px] font-bold ${
+                        active
+                          ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      }`}
+                    >
+                      {initialsOf(p.label)}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs leading-4 font-semibold text-slate-950 dark:text-white">
+                        {p.label}
+                      </div>
+                      <div className="truncate text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                        {p.roleTitle}
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9.5px] leading-3 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                        {p.limitLabel}
-                      </span>
-                      {active && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9.5px] leading-3 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                      {p.limitLabel}
+                    </span>
+                    {active && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

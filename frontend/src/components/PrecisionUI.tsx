@@ -49,10 +49,7 @@ export type SpotlightTone =
   | "blue"
   | "fuchsia";
 
-export const SPOTLIGHT_PALETTE: Record<
-  SpotlightTone,
-  { fill: string; border: string }
-> = {
+export const SPOTLIGHT_PALETTE: Record<SpotlightTone, { fill: string; border: string }> = {
   indigo: { fill: "rgba(99, 102, 241, 0.20)", border: "rgba(99, 102, 241, 0.72)" },
   emerald: { fill: "rgba(16, 185, 129, 0.20)", border: "rgba(16, 185, 129, 0.72)" },
   cyan: { fill: "rgba(6, 182, 212, 0.20)", border: "rgba(6, 182, 212, 0.72)" },
@@ -77,6 +74,7 @@ export function SpotlightCard({
   asButton = false,
   disabled = false,
   lift = false,
+  allowOverflow = false,
   onDragOver,
   onDragLeave,
   onDrop,
@@ -90,6 +88,7 @@ export function SpotlightCard({
   asButton?: boolean;
   disabled?: boolean;
   lift?: boolean;
+  allowOverflow?: boolean;
   onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDragLeave?: (e: React.DragEvent<HTMLDivElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -111,40 +110,40 @@ export function SpotlightCard({
     "--spot-border-override": borderColor ?? palette.border,
   } as React.CSSProperties;
 
+  const overflowClass = allowOverflow ? "allow-overflow" : "";
+  const liftClass = lift
+    ? "transition-[transform,border-color,box-shadow,background-color] duration-150 ease-out [transform:translate3d(0,0,0)] hover:[transform:translate3d(0,-2px,0)]"
+    : "";
+
   if (asButton) {
     return (
-      <motion.button
+      <button
         ref={btnRef}
         type="button"
         disabled={disabled}
-        whileHover={disabled ? undefined : { y: -2 }}
-        whileTap={disabled ? undefined : { scale: 0.985 }}
-        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
         onMouseMove={handleMouseMove}
         onClick={onClick}
         style={style}
-        className={`bento-card spotlight-surface cursor-pointer rounded-2xl text-left disabled:pointer-events-none disabled:opacity-50 ${className}`}
+        className={`bento-card spotlight-surface ${overflowClass} cursor-pointer rounded-2xl text-left transition-[transform,border-color,box-shadow,background-color] duration-150 ease-out [transform:translate3d(0,0,0)] hover:[transform:translate3d(0,-2px,0)] active:opacity-95 disabled:pointer-events-none disabled:opacity-50 ${className}`}
       >
         {children}
-      </motion.button>
+      </button>
     );
   }
 
   return (
-    <motion.div
+    <div
       ref={divRef}
-      whileHover={lift ? { y: -2 } : undefined}
-      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
       onMouseMove={handleMouseMove}
       onClick={onClick}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       style={style}
-      className={`bento-card spotlight-surface rounded-2xl ${className}`}
+      className={`bento-card spotlight-surface ${overflowClass} ${liftClass} rounded-2xl ${className}`}
     >
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -174,18 +173,18 @@ export function TactileThemeToggle({
       <motion.span
         initial={false}
         animate={{ x: isDark ? 32 : 0 }}
-        transition={{ type: "spring", stiffness: 520, damping: 34 }}
+        transition={{ type: "spring", stiffness: 520, damping: 36 }}
         className={`absolute top-1 left-1 flex h-7 w-7 items-center justify-center rounded-full shadow-md ${
           isDark
-            ? "bg-gradient-to-b from-slate-700 to-slate-800 text-sky-300 ring-1 ring-white/15"
-            : "bg-gradient-to-b from-white to-slate-50 text-amber-500 ring-1 ring-slate-900/10"
+            ? "bg-linear-to-b from-slate-700 to-slate-800 text-sky-300 ring-1 ring-white/15"
+            : "bg-linear-to-b from-white to-slate-50 text-amber-500 ring-1 ring-slate-900/10"
         }`}
       >
         <motion.span
           key={theme}
-          initial={{ rotate: -45, opacity: 0.4, scale: 0.82 }}
-          animate={{ rotate: 0, opacity: 1, scale: 1 }}
-          transition={{ duration: 0.2 }}
+          initial={{ rotate: -45, opacity: 0.4 }}
+          animate={{ rotate: 0, opacity: 1 }}
+          transition={{ duration: 0.18 }}
         >
           {isDark ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
         </motion.span>
@@ -195,7 +194,7 @@ export function TactileThemeToggle({
 }
 
 /* ============================================================================
-   3. PersonaPopover — Enterprise Account & RBAC Authority Switcher
+   3. PersonaPopover — Opaque, Flush, Zero-Snap RBAC Switcher (Exported Utility)
    ============================================================================ */
 function initialsOf(name: string) {
   return name
@@ -225,97 +224,103 @@ export function PersonaPopover({
         setOpen(false);
       }
     };
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     window.addEventListener("mousedown", onOutside);
-    return () => window.removeEventListener("mousedown", onOutside);
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      window.removeEventListener("mousedown", onOutside);
+      window.removeEventListener("keydown", onEsc);
+    };
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative">
-      <motion.button
+    <div ref={containerRef} className="relative sm:w-[312px]">
+      <button
         type="button"
-        whileTap={{ scale: 0.97 }}
         onClick={() => setOpen((o) => !o)}
-        className="bento-card flex h-9 cursor-pointer items-center gap-2 rounded-xl px-2.5 text-left"
+        className="flex h-9 w-full cursor-pointer items-center justify-between gap-2 rounded-xl border border-slate-200/90 bg-white/95 px-2.5 text-left shadow-xs transition-colors hover:border-slate-300 dark:border-slate-700/80 dark:bg-slate-900/95 dark:hover:border-slate-600"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-sky-500/20 to-indigo-500/25 font-mono text-[10px] font-bold text-sky-700 ring-1 ring-sky-500/30 dark:text-sky-300">
-          {initialsOf(persona.label)}
-        </span>
-        <div className="hidden leading-tight sm:block">
-          <div className="text-xs font-semibold text-slate-900 dark:text-white">
-            {persona.label}
-          </div>
-          <div className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
-            {persona.roleTitle} &middot; {persona.limitLabel}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-sky-500/20 to-indigo-500/25 font-mono text-[10px] font-bold text-sky-700 ring-1 ring-sky-500/30 dark:text-sky-300">
+            {initialsOf(persona.label)}
+          </span>
+          <div className="hidden min-w-0 sm:block">
+            <div className="truncate text-xs leading-4 font-semibold text-slate-900 dark:text-white">
+              {persona.label}
+            </div>
+            <div className="truncate font-mono text-[10px] leading-3 text-slate-500 dark:text-slate-400">
+              {persona.roleTitle} &middot; {persona.limitLabel}
+            </div>
           </div>
         </div>
         <ChevronDown
-          className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+          className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150 ${
             open ? "rotate-180" : ""
           }`}
         />
-      </motion.button>
+      </button>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0, y: 6, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 4, scale: 0.97 }}
-            transition={{ type: "spring", stiffness: 460, damping: 32 }}
-            className="bento-card absolute right-0 z-40 mt-2 w-72 overflow-hidden rounded-2xl bg-white/95 p-2 shadow-2xl dark:bg-slate-900/95"
-          >
-            <div className="flex items-center justify-between px-2.5 py-1.5">
-              <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                Active RBAC Identity
-              </span>
-              <span className="rounded bg-sky-500/12 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-sky-700 dark:text-sky-300">
-                SOX 404
-              </span>
-            </div>
+      {open && (
+        <div className="popover-surface absolute right-0 z-50 mt-2 w-[312px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] sm:w-full dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]">
+          <div className="mb-1 flex items-center justify-between border-b border-slate-100 px-2 pt-1 pb-2 dark:border-slate-800">
+            <span className="font-mono text-[10px] leading-4 font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              Active RBAC Identity
+            </span>
+            <span className="rounded bg-sky-500/12 px-1.5 py-0.5 font-mono text-[9px] leading-3 font-bold text-sky-700 dark:text-sky-300">
+              SOX 404
+            </span>
+          </div>
 
-            <div className="space-y-1">
-              {personas.map((p) => {
-                const active = p.key === persona.key;
-                return (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => {
-                      onSelect(p);
-                      setOpen(false);
-                    }}
-                    className={`flex w-full cursor-pointer items-center justify-between gap-2.5 rounded-xl px-2.5 py-2 text-left transition ${
-                      active
-                        ? "bg-sky-500/12 ring-1 ring-sky-500/35"
-                        : "hover:bg-slate-100 dark:hover:bg-slate-800/75"
-                    }`}
-                  >
-                    <div className="flex min-w-0 items-center gap-2.5">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-200/80 font-mono text-[10px] font-bold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                        {initialsOf(p.label)}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-semibold text-slate-900 dark:text-white">
-                          {p.label}
-                        </div>
-                        <div className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-                          {p.roleTitle}
-                        </div>
+          <div className="space-y-1">
+            {personas.map((p) => {
+              const active = p.key === persona.key;
+              return (
+                <button
+                  key={p.key}
+                  type="button"
+                  onClick={() => {
+                    onSelect(p);
+                    setOpen(false);
+                  }}
+                  className={`flex h-12 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2 text-left transition-colors ${
+                    active
+                      ? "bg-sky-50 ring-1 ring-sky-500/35 dark:bg-sky-500/15 dark:ring-sky-400/35"
+                      : "hover:bg-slate-100 dark:hover:bg-slate-800/90"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-[10px] font-bold ${
+                        active
+                          ? "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+                          : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      }`}
+                    >
+                      {initialsOf(p.label)}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate text-xs leading-4 font-semibold text-slate-950 dark:text-white">
+                        {p.label}
+                      </div>
+                      <div className="truncate text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                        {p.roleTitle}
                       </div>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      <span className="rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                        {p.limitLabel}
-                      </span>
-                      {active && <Check className="h-3.5 w-3.5 text-sky-500" />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[9.5px] leading-3 font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                      {p.limitLabel}
+                    </span>
+                    {active && <Check className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" />}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -462,7 +467,6 @@ export function FinOpsDialGauge({
 
   const current = dialData[mode];
 
-  // Single spring value drives BOTH the arc sweep AND the orbital knob coordinates
   const pctMv = useMotionValue(current.pct);
   const smoothPct = useSpring(pctMv, { stiffness: 125, damping: 22, mass: 0.9 });
 
@@ -502,7 +506,7 @@ export function FinOpsDialGauge({
         </span>
       </div>
 
-      {/* True Orbital SVG Dial */}
+      {/* Synchronized Orbital SVG Dial */}
       <div className="relative mx-auto my-1 flex w-full max-w-[216px] items-center justify-center">
         <svg viewBox="0 -14 220 212" className="w-full overflow-visible">
           {DIAL_TICKS.map((t) => {
@@ -523,7 +527,6 @@ export function FinOpsDialGauge({
             );
           })}
 
-          {/* Track background arc */}
           <path
             d={FULL_DIAL_ARC}
             fill="none"
@@ -534,7 +537,6 @@ export function FinOpsDialGauge({
             className="text-slate-500 dark:text-slate-400"
           />
 
-          {/* Spring-swept illuminated arc */}
           <motion.path
             d={FULL_DIAL_ARC}
             fill="none"
@@ -548,7 +550,6 @@ export function FinOpsDialGauge({
             }}
           />
 
-          {/* Soft orbital halo ring */}
           <motion.circle
             cx={knobCx}
             cy={knobCy}
@@ -557,7 +558,6 @@ export function FinOpsDialGauge({
             fillOpacity={0.22}
           />
 
-          {/* Machined orbital knob riding the exact arc tip */}
           <motion.circle
             cx={knobCx}
             cy={knobCy}
@@ -597,19 +597,19 @@ export function FinOpsDialGauge({
           <AnimatePresence mode="wait">
             <motion.div
               key={mode}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.15 }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.14 }}
               className="flex flex-col items-center"
             >
-              <div className="font-mono text-3xl font-bold tracking-tight text-slate-900 tabular-nums dark:text-white">
+              <div className="font-mono text-3xl leading-9 font-bold tracking-tight text-slate-900 tabular-nums dark:text-white">
                 {current.display}
               </div>
-              <div className={`mt-0.5 text-[11px] font-semibold ${current.pill}`}>
+              <div className={`mt-0.5 text-[11px] leading-4 font-semibold ${current.pill}`}>
                 {current.label}
               </div>
-              <div className="mt-1 max-w-[144px] text-[10px] leading-snug text-slate-500 dark:text-slate-400">
+              <div className="mt-1 max-w-[144px] text-[10px] leading-3.5 text-slate-500 dark:text-slate-400">
                 {current.sub}
               </div>
             </motion.div>
@@ -691,7 +691,7 @@ export function LivePipelineRail({
           return (
             <div
               key={node.label}
-              className={`relative rounded-xl border px-3 py-2.5 transition-all duration-300 ${
+              className={`relative rounded-xl border px-3 py-2.5 transition-colors duration-200 ${
                 active
                   ? "border-sky-500/60 bg-sky-500/10 shadow-[0_0_24px_-10px_rgba(14,165,233,0.75)] dark:bg-sky-500/15"
                   : completed
@@ -730,7 +730,7 @@ export function LivePipelineRail({
 }
 
 /* ============================================================================
-   7. SandboxDrawer — On-Demand Sample Scenario Simulator
+   7. SandboxDrawer — 100% Opaque, Zero-Snap Slide-Over Simulator
    ============================================================================ */
 export interface PresetSpec {
   id: DemoPreset;
@@ -762,16 +762,20 @@ export function SandboxDrawer({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
+          transition={{ duration: 0.16 }}
           onClick={onClose}
           className="fixed inset-0 z-50 flex justify-end bg-slate-950/55 backdrop-blur-sm"
         >
           <motion.aside
             initial={{ x: "100%" }}
-            animate={{ x: 0 }}
+            animate={{ x: "0%" }}
             exit={{ x: "100%" }}
-            transition={{ type: "spring", stiffness: 380, damping: 36 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            transformTemplate={(_, generated) =>
+              generated === "none" ? "translate3d(0, 0, 0)" : generated
+            }
             onClick={(e) => e.stopPropagation()}
-            className="flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white/95 shadow-2xl backdrop-blur-xl dark:border-slate-800 dark:bg-[#0b101b]/95"
+            className="flex h-full w-full max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-[#0b101b]"
           >
             <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
               <div>
@@ -784,7 +788,7 @@ export function SandboxDrawer({
                     SAMPLE DATA
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                <p className="mt-1 text-xs leading-4 text-slate-500 dark:text-slate-400">
                   Fire realistic sample payloads through the live FastAPI + Gemini + PostgreSQL
                   pipeline to test auto-settlement, HITL pauses, and fraud defense.
                 </p>
@@ -793,7 +797,7 @@ export function SandboxDrawer({
                 type="button"
                 onClick={onClose}
                 aria-label="Close Sandbox Simulator"
-                className="cursor-pointer rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
+                className="cursor-pointer rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -824,17 +828,17 @@ export function SandboxDrawer({
                         {card.amount}
                       </span>
                     </div>
-                    <div className="text-sm font-bold text-slate-950 dark:text-white">
+                    <div className="text-sm leading-5 font-bold text-slate-950 dark:text-white">
                       {card.title}
                     </div>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">
+                    <p className="mt-1 text-xs leading-4 text-slate-500 dark:text-slate-400">
                       {card.subtitle}
                     </p>
                     <div className="mt-3 flex items-center justify-between border-t border-slate-200/70 pt-2.5 dark:border-slate-800/80">
                       <span className="inline-flex items-center gap-1 font-mono text-[11px] font-semibold text-sky-600 dark:text-sky-400">
                         {isRunning ? "Running pipeline..." : "Execute sample payload"}
                         {!isRunning && (
-                          <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                          <ArrowUpRight className="h-3.5 w-3.5 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
                         )}
                       </span>
                       {isRunning ? (
@@ -848,7 +852,7 @@ export function SandboxDrawer({
               })}
             </div>
 
-            <div className="border-t border-slate-200 bg-slate-50/80 px-5 py-3 text-[11px] text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
+            <div className="border-t border-slate-200 bg-slate-50 px-5 py-3 text-[11px] leading-4 text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
               All runs execute live against your Neon PostgreSQL database and log cryptographically
               sealed audit trails.
             </div>
@@ -860,7 +864,7 @@ export function SandboxDrawer({
 }
 
 /* ============================================================================
-   8. CommandPalette — Frosted Ctrl+K Quick Launcher (React 19 Lint-Clean)
+   8. CommandPalette — 100% Opaque, Zero-Snap Ctrl+K Quick Launcher
    ============================================================================ */
 export interface PaletteAction {
   id: string;
@@ -880,11 +884,8 @@ export function CommandPalette({
   onClose: () => void;
   actions: PaletteAction[];
 }) {
-  return (
-    <AnimatePresence>
-      {open && <CommandPaletteDialog onClose={onClose} actions={actions} />}
-    </AnimatePresence>
-  );
+  if (!open) return null;
+  return <CommandPaletteDialog onClose={onClose} actions={actions} />;
 }
 
 function CommandPaletteDialog({
@@ -898,7 +899,7 @@ function CommandPaletteDialog({
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    const id = window.setTimeout(() => inputRef.current?.focus(), 25);
+    const id = window.setTimeout(() => inputRef.current?.focus(), 20);
     return () => window.clearTimeout(id);
   }, []);
 
@@ -931,34 +932,27 @@ function CommandPaletteDialog({
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
+    <div
       onClick={onClose}
       className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/60 px-4 pt-[12vh] backdrop-blur-md"
     >
-      <motion.div
-        initial={{ opacity: 0, y: -8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -6 }}
-        transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
+      <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700/90 dark:bg-[#0d1321]"
+        className="modal-surface w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_24px_64px_-16px_rgba(15,23,42,0.35)] dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_28px_72px_-16px_rgba(0,0,0,0.88)]"
       >
         <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3.5 dark:border-slate-800">
-          <Search className="h-4 w-4 text-slate-400" />
+          <Search className="h-4 w-4 shrink-0 text-slate-400" />
           <input
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Jump to workspace, run sandbox scenario, switch persona, toggle theme..."
-            className="flex-1 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-white dark:placeholder:text-slate-500"
+            className="flex-1 bg-transparent text-sm leading-5 text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-white dark:placeholder:text-slate-500"
           />
           <button
             type="button"
             onClick={onClose}
-            className="cursor-pointer rounded-md border border-slate-200 px-1.5 py-0.5 font-mono text-[10px] text-slate-500 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:text-white"
+            className="cursor-pointer rounded-md border border-slate-200 px-1.5 py-0.5 font-mono text-[10px] leading-3 text-slate-500 hover:text-slate-900 dark:border-slate-700 dark:text-slate-400 dark:hover:text-white"
           >
             ESC
           </button>
@@ -966,16 +960,14 @@ function CommandPaletteDialog({
 
         <div className="max-h-[360px] overflow-y-auto p-2">
           {filtered.length === 0 ? (
-            <div className="py-10 text-center text-xs text-slate-400">
-              No matching commands.
-            </div>
+            <div className="py-10 text-center text-xs text-slate-400">No matching commands.</div>
           ) : (
             (["Navigate", "Run Scenario", "Switch Persona", "System"] as const).map((group) => {
               const items = filtered.filter((a) => a.group === group);
               if (items.length === 0) return null;
               return (
                 <div key={group} className="mb-2 last:mb-0">
-                  <div className="px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                  <div className="px-2.5 py-1 font-mono text-[10px] leading-4 font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                     {group}
                   </div>
                   {items.map((item) => (
@@ -986,21 +978,21 @@ function CommandPaletteDialog({
                         onClose();
                         item.onSelect();
                       }}
-                      className="group flex w-full cursor-pointer items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition hover:bg-slate-100 dark:hover:bg-slate-800/80"
+                      className="group flex h-9 w-full cursor-pointer items-center justify-between rounded-xl px-3 text-left text-xs transition-colors hover:bg-slate-100 dark:hover:bg-slate-800/90"
                     >
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex min-w-0 items-center gap-2.5">
                         {renderIcon(item.icon)}
-                        <span className="font-medium text-slate-800 dark:text-slate-100">
+                        <span className="truncate leading-4 font-medium text-slate-800 dark:text-slate-100">
                           {item.label}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                         {item.hint && (
-                          <span className="font-mono text-[10px] text-slate-400">
+                          <span className="font-mono text-[10px] leading-4 text-slate-400">
                             {item.hint}
                           </span>
                         )}
-                        <ArrowRight className="h-3.5 w-3.5 text-slate-400 opacity-0 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+                        <ArrowRight className="h-3.5 w-3.5 text-slate-400 opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
                       </div>
                     </button>
                   ))}
@@ -1010,14 +1002,14 @@ function CommandPaletteDialog({
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-slate-200/80 bg-slate-50/80 px-4 py-2 text-[11px] text-slate-400 dark:border-slate-800 dark:bg-slate-950/60">
+        <div className="flex items-center justify-between border-t border-slate-200 bg-slate-50 px-4 py-2 text-[11px] leading-4 text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
           <span className="inline-flex items-center gap-1.5">
             <Command className="h-3 w-3" />
             LedgerPilot Quick Command
           </span>
           <span className="font-mono text-[10px]">Ctrl + K anywhere</span>
         </div>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   );
 }

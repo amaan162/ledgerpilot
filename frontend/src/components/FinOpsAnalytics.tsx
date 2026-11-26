@@ -141,12 +141,11 @@ export function FinOpsAnalytics({
               </span>
             )}
             {!postureForbidden && (
-              <motion.button
+              <button
                 type="button"
-                whileTap={{ scale: 0.96 }}
                 disabled={verifyingAudit}
                 onClick={() => void onVerifyAudit()}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-sky-500/35 bg-sky-500/12 px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-500/20 disabled:opacity-50 dark:text-sky-200"
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-sky-500/35 bg-sky-500/12 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-colors hover:bg-sky-500/20 active:opacity-90 disabled:opacity-50 dark:text-sky-200"
               >
                 {verifyingAudit ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -154,7 +153,7 @@ export function FinOpsAnalytics({
                   <Zap className="h-3.5 w-3.5 text-sky-500" />
                 )}
                 {verifyingAudit ? "Verifying HMAC Seals..." : "Verify Cryptographic Audit Chain"}
-              </motion.button>
+              </button>
             )}
           </div>
         </div>
@@ -197,53 +196,55 @@ export function FinOpsAnalytics({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-              <div className="tactile-well rounded-xl p-4 lg:col-span-7">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
-                    <Cpu className="h-3.5 w-3.5 text-sky-500" />
-                    Upstream Circuit Breakers
-                  </span>
-                  <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
-                    Buckets: {securityPosture.controls.rate_limiter_active_buckets} &middot; Replay:{" "}
-                    {securityPosture.controls.hmac_webhook_replay_window_s}s
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  {securityPosture.reliability.circuit_breakers.map((cb) => {
-                    const closed = cb.state === "CLOSED";
-                    return (
-                      <div
-                        key={cb.name}
-                        className="rounded-xl border border-slate-200/80 bg-white/80 p-3 dark:border-slate-800 dark:bg-slate-900/75"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-xs font-bold text-slate-900 dark:text-white">
-                            {cb.name}
-                          </span>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold ${
-                              closed
-                                ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
-                                : "border-rose-500/35 bg-rose-500/12 text-rose-700 dark:text-rose-300"
-                            }`}
-                          >
-                            {cb.state}
-                          </span>
+            <div className="grid grid-cols-1 items-stretch gap-4 lg:grid-cols-12">
+              <div className="tactile-well flex h-full flex-col justify-between rounded-xl p-4 lg:col-span-7">
+                <div>
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                      <Cpu className="h-3.5 w-3.5 text-sky-500" />
+                      Upstream Circuit Breakers
+                    </span>
+                    <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                      Buckets: {securityPosture.controls.rate_limiter_active_buckets} &middot;
+                      Replay: {securityPosture.controls.hmac_webhook_replay_window_s}s
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    {securityPosture.reliability.circuit_breakers.map((cb) => {
+                      const closed = cb.state === "CLOSED";
+                      return (
+                        <div
+                          key={cb.name}
+                          className="rounded-xl border border-slate-200/80 bg-white/80 p-3 dark:border-slate-800 dark:bg-slate-900/75"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-xs font-bold text-slate-900 dark:text-white">
+                              {cb.name}
+                            </span>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold ${
+                                closed
+                                  ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
+                                  : "border-rose-500/35 bg-rose-500/12 text-rose-700 dark:text-rose-300"
+                              }`}
+                            >
+                              {cb.state}
+                            </span>
+                          </div>
+                          <div className="mt-1.5 flex items-center justify-between font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                            <span>
+                              Failures: {cb.failure_count}/{cb.failure_threshold}
+                            </span>
+                            <span>Trips: {cb.total_trips}</span>
+                          </div>
                         </div>
-                        <div className="mt-1.5 flex items-center justify-between font-mono text-[11px] text-slate-500 dark:text-slate-400">
-                          <span>
-                            Failures: {cb.failure_count}/{cb.failure_threshold}
-                          </span>
-                          <span>Trips: {cb.total_trips}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
-              <div className="tactile-well flex flex-col justify-between rounded-xl p-4 lg:col-span-5">
+              <div className="tactile-well flex h-full flex-col justify-between rounded-xl p-4 lg:col-span-5">
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
@@ -285,8 +286,9 @@ export function FinOpsAnalytics({
 
             {auditReport && (
               <motion.div
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.16 }}
                 className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3.5 text-xs ${
                   auditReport.verified
                     ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
@@ -321,9 +323,12 @@ export function FinOpsAnalytics({
         )}
       </SpotlightCard>
 
-      {/* Row 2: Interactive Outcome Donut + Golden Eval Scorecard */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-        <SpotlightCard tone="fuchsia" className="p-5 lg:col-span-5">
+      {/* Row 2: Equal-Height Interactive Outcome Donut + Golden Eval Scorecard */}
+      <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-12">
+        <SpotlightCard
+          tone="fuchsia"
+          className="flex h-full flex-col justify-between p-5 lg:col-span-5"
+        >
           <div className="mb-4 flex items-center justify-between">
             <h3 className="flex items-center gap-2 text-sm font-bold text-slate-950 dark:text-white">
               <BarChart3 className="h-4 w-4 text-fuchsia-500" />
@@ -334,7 +339,7 @@ export function FinOpsAnalytics({
             </span>
           </div>
 
-          <div className="flex flex-col items-center gap-6 sm:flex-row">
+          <div className="my-auto flex flex-col items-center gap-6 sm:flex-row">
             <div
               className="relative h-40 w-40 shrink-0"
               onMouseLeave={() => setHoveredSlice(null)}
@@ -364,13 +369,13 @@ export function FinOpsAnalytics({
                       strokeDashoffset={seg.offset}
                       strokeLinecap="butt"
                       onMouseEnter={() => setHoveredSlice(seg.label)}
-                      className="cursor-pointer transition-all duration-200"
+                      className="cursor-pointer transition-[stroke-width] duration-150"
                       initial={{ opacity: 0 }}
                       animate={{
                         opacity:
                           hoveredSlice === null || hoveredSlice === seg.label ? 1 : 0.3,
                       }}
-                      transition={{ delay: idx * 0.06, duration: 0.25 }}
+                      transition={{ delay: idx * 0.05, duration: 0.2 }}
                     />
                   ) : null
                 )}
@@ -379,16 +384,16 @@ export function FinOpsAnalytics({
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={centerLabel}
-                    initial={{ opacity: 0, y: 3 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -3 }}
-                    transition={{ duration: 0.14 }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.12 }}
                     className="flex flex-col items-center"
                   >
-                    <span className="font-mono text-xl font-bold text-slate-950 tabular-nums dark:text-white">
+                    <span className="font-mono text-xl leading-6 font-bold text-slate-950 tabular-nums dark:text-white">
                       {centerPct}%
                     </span>
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    <span className="text-[10px] leading-4 font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       {centerLabel}
                     </span>
                   </motion.div>
@@ -434,7 +439,10 @@ export function FinOpsAnalytics({
           </div>
         </SpotlightCard>
 
-        <SpotlightCard tone="violet" className="p-5 lg:col-span-7">
+        <SpotlightCard
+          tone="violet"
+          className="flex h-full flex-col justify-between p-5 lg:col-span-7"
+        >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h3 className="flex items-center gap-2 text-sm font-bold text-slate-950 dark:text-white">
               <Sparkles className="h-4 w-4 text-violet-500" />
@@ -569,12 +577,11 @@ export function FinOpsAnalytics({
                       placeholder="Audit resolution note (optional)..."
                       className="min-w-56 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500"
                     />
-                    <motion.button
+                    <button
                       type="button"
-                      whileTap={{ scale: 0.95 }}
                       disabled={resolvingId === job.id}
                       onClick={() => void handleResolveClick(job.id)}
-                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-500/25 disabled:opacity-50 dark:text-emerald-200"
+                      className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-3 py-1.5 text-[11px] font-semibold text-emerald-800 transition-colors hover:bg-emerald-500/25 active:opacity-90 disabled:opacity-50 dark:text-emerald-200"
                     >
                       {resolvingId === job.id ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -582,7 +589,7 @@ export function FinOpsAnalytics({
                         <CheckCircle2 className="h-3 w-3" />
                       )}
                       Mark Resolved
-                    </motion.button>
+                    </button>
                   </div>
                 )}
               </div>
