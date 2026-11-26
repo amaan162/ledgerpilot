@@ -170,8 +170,12 @@ async def ingest_invoice(
         idempotency_key=idempotency_key,
     )
 
-    # Self-heal ephemeral cloud disk if a duplicate upload matches an existing DB row whose file was wiped
-    stored_path_str = getattr(invoice, "file_path", None) or getattr(invoice, "storage_path", None)
+    # Self-heal ephemeral cloud disk if a duplicate upload matches an existing DB row whose PDF was wiped
+    stored_path_str = (
+        (invoice.extracted_payload or {}).get("stored_file_path")
+        or getattr(invoice, "file_path", None)
+        or getattr(invoice, "storage_path", None)
+    )
     if is_duplicate and stored_path_str:
         stored_path = Path(stored_path_str)
         if not stored_path.exists():

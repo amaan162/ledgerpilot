@@ -1,10 +1,12 @@
 import asyncio
+import threading
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import Checkpoint, CheckpointMetadata, CheckpointTuple
 from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from app.core.config import get_settings
@@ -45,7 +47,9 @@ class AsyncCompatiblePostgresSaver(PostgresSaver):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
-        items = await asyncio.to_thread(lambda: list(self.list(config, filter=filter, before=before, limit=limit)))
+        items = await asyncio.to_thread(
+            lambda: list(self.list(config, filter=filter, before=before, limit=limit))
+        )
         for item in items:
             yield item
 
@@ -57,28 +61,49 @@ class CheckpointerManager:
     """Manages the PostgreSQL psycopg connection pool and LangGraph checkpoint tables."""
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._pool: ConnectionPool | None = None
         self._saver: AsyncCompatiblePostgresSaver | None = None
 
     def get_saver(self) -> AsyncCompatiblePostgresSaver:
-        if self._saver is None:
+        if self._saver is not None:
+            return self._saver
+
+        with self._lock:
+            if self._saver is not None:
+                return self._saver
+
             settings = get_settings()
-            self._pool = ConnectionPool(
+            pool = ConnectionPool(
                 conninfo=settings.CHECKPOINT_DATABASE_URL,
                 min_size=1,
                 max_size=10,
+                max_idle=240.0,
+                check=ConnectionPool.check_connection,
                 open=True,
-                kwargs={},
+                kwargs={
+                    "autocommit": True,
+                    "prepare_threshold": 0,
+                    "row_factory": dict_row,
+                },
             )
-            self._saver = AsyncCompatiblePostgresSaver(self._pool)
-            self._saver.setup()
-        return self._saver
+            try:
+                saver = AsyncCompatiblePostgresSaver(pool)
+                saver.setup()
+            except Exception:
+                pool.close()
+                raise
+
+            self._pool = pool
+            self._saver = saver
+            return self._saver
 
     def close(self) -> None:
-        if self._pool is not None:
-            self._pool.close()
-            self._pool = None
-            self._saver = None
+        with self._lock:
+            if self._pool is not None:
+                self._pool.close()
+                self._pool = None
+                self._saver = None
 
 
 checkpointer_manager = CheckpointerManager()
