@@ -507,7 +507,6 @@ export function FinOpsDialGauge({
         </span>
       </div>
 
-      {/* Synchronized Orbital SVG Dial */}
       <div className="relative mx-auto my-1 flex w-full max-w-[216px] items-center justify-center">
         <svg viewBox="0 -14 220 212" className="w-full overflow-visible">
           {DIAL_TICKS.map((t) => {
@@ -618,7 +617,6 @@ export function FinOpsDialGauge({
         </div>
       </div>
 
-      {/* Mode Switcher */}
       <div className="tactile-well grid grid-cols-3 gap-1 rounded-xl p-1">
         {(["fraud", "settle", "accuracy"] as const).map((key) => {
           const active = mode === key;
@@ -709,7 +707,6 @@ export function LivePipelineRail({
         </span>
       </div>
 
-      {/* Continuous Spring Progress Track */}
       <div className="relative mb-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-800/80">
         <motion.div
           initial={{ width: "8%" }}

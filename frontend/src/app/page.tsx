@@ -70,6 +70,12 @@ import {
   type SpotlightTone,
 } from "@/components/PrecisionUI";
 
+type DossierPromise = Promise<InvoiceDetail | null>;
+type DossierMap = Map<string, InvoiceDetail>;
+type XmlMap = Map<string, string | null>;
+type PrefetchMap = Map<string, DossierPromise>;
+type ReasonMap = Record<string, string>;
+
 const STATUS_BADGE: Record<string, string> = {
   PAYMENT_STAGED:
     "bg-emerald-500/12 text-emerald-700 border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/40",
@@ -247,7 +253,7 @@ export default function CommandCenterPage() {
   const [busyElapsedMs, setBusyElapsedMs] = useState(0);
   const [pipelineCompleting, setPipelineCompleting] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const [decisionReason, setDecisionReason] = useState<Record<string, string>>({});
+  const [decisionReason, setDecisionReason] = useState<ReasonMap>({});
 
   const [holdModalOpen, setHoldModalOpen] = useState(false);
   const [holdReason, setHoldReason] = useState("");
@@ -258,10 +264,10 @@ export default function CommandCenterPage() {
   const pendingScrollTargetRef = useRef<ScrollTarget | null>(null);
   const selectedInvoiceIdRef = useRef<string | null>(null);
 
-  // Lightspeed 0ms in-memory dossier & XML cache + deduplicated inflight prefetch tracker
-  const dossierCacheRef = useRef>(new Map());
-  const xmlCacheRef = useRef>(new Map());
-  const inflightPrefetchRef = useRef>>(new Map());
+  // Lightspeed 0ms in-memory dossier & XML cache (flat type aliases — copy-paste safe)
+  const dossierCacheRef = useRef<DossierMap>(new Map());
+  const xmlCacheRef = useRef<XmlMap>(new Map());
+  const inflightPrefetchRef = useRef<PrefetchMap>(new Map());
   const selectSeqRef = useRef(0);
 
   const showPipelineRail = isLangGraphAction(busyAction) || pipelineCompleting;
@@ -341,7 +347,7 @@ export default function CommandCenterPage() {
         if (existing) return existing;
       }
 
-      const promise = (async () => {
+      const promise: DossierPromise = (async () => {
         try {
           if (knownSettlementRef) {
             const [detail, xml] = await Promise.all([
@@ -674,13 +680,12 @@ export default function CommandCenterPage() {
         dossierRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
       }
 
-      // If not cached yet (or cached without audit logs), hydrate silently in parallel
       if (!cachedDetail) {
         void fetchAndCacheDossier(
           invoiceId,
           persona.apiKey,
           summaryMatch?.settlement_reference
-        ).then((fresh) => {
+        ).then((fresh: InvoiceDetail | null) => {
           if (reqSeq !== selectSeqRef.current) return;
           if (fresh) {
             setSelectedInvoice(fresh);
