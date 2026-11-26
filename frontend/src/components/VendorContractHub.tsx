@@ -187,11 +187,11 @@ export function VendorContractHub({
             <AnimatePresence>
               {vendorMenuOpen && (
                 <motion.div
-                  initial={{ opacity: 0, y: 6, scale: 0.97 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 4, scale: 0.97 }}
-                  transition={{ type: "spring", stiffness: 520, damping: 36 }}
-                  className="bento-card absolute left-0 z-40 mt-2 w-80 overflow-hidden rounded-2xl bg-white/95 p-1.5 shadow-2xl dark:bg-slate-900/95"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+                  className="absolute left-0 z-50 mt-2 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_20px_50px_-12px_rgba(15,23,42,0.28)] dark:border-slate-700/90 dark:bg-[#0d1321] dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.85)]"
                 >
                   {vendors.map((v) => {
                     const selected = v.vendor_code === activeVendorCode;
@@ -203,15 +203,15 @@ export function VendorContractHub({
                           setSelectedCode(v.vendor_code);
                           setVendorMenuOpen(false);
                         }}
-                        className={`flex w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition ${
+                        className={`flex h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-xl px-2.5 text-left text-xs transition-colors ${
                           selected
-                            ? "bg-indigo-500/12 text-indigo-700 ring-1 ring-indigo-500/30 dark:text-indigo-200"
-                            : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/80"
+                            ? "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200"
+                            : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800/90"
                         }`}
                       >
                         <div className="min-w-0">
-                          <div className="truncate font-semibold">{v.legal_name}</div>
-                          <div className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                          <div className="truncate leading-4 font-semibold">{v.legal_name}</div>
+                          <div className="font-mono text-[10px] leading-4 text-slate-500 dark:text-slate-400">
                             {v.vendor_code}
                           </div>
                         </div>
@@ -222,7 +222,6 @@ export function VendorContractHub({
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
 
           <div className="relative min-w-[260px] flex-1">
             <Search className="pointer-events-none absolute top-2.5 left-3 h-4 w-4 text-slate-400" />

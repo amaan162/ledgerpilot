@@ -119,7 +119,7 @@ export function SpotlightCard({
         disabled={disabled}
         whileHover={disabled ? undefined : { y: -2 }}
         whileTap={disabled ? undefined : { scale: 0.985 }}
-        transition={{ type: "spring", stiffness: 440, damping: 30 }}
+        transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
         onMouseMove={handleMouseMove}
         onClick={onClick}
         style={style}
@@ -134,7 +134,7 @@ export function SpotlightCard({
     <motion.div
       ref={divRef}
       whileHover={lift ? { y: -2 } : undefined}
-      transition={{ type: "spring", stiffness: 420, damping: 30 }}
+      transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
       onMouseMove={handleMouseMove}
       onClick={onClick}
       onDragOver={onDragOver}
@@ -939,12 +939,12 @@ function CommandPaletteDialog({
       className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/60 px-4 pt-[12vh] backdrop-blur-md"
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.96, y: -10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.96, y: -8 }}
-        transition={{ type: "spring", stiffness: 420, damping: 32 }}
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -6 }}
+        transition={{ duration: 0.15, ease: [0.16, 1, 0.3, 1] }}
         onClick={(e) => e.stopPropagation()}
-        className="bento-card w-full max-w-xl overflow-hidden rounded-2xl bg-white/95 shadow-2xl dark:bg-slate-900/95"
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700/90 dark:bg-[#0d1321]"
       >
         <div className="flex items-center gap-3 border-b border-slate-200 px-4 py-3.5 dark:border-slate-800">
           <Search className="h-4 w-4 text-slate-400" />

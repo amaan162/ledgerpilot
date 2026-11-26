@@ -23,10 +23,10 @@ export function ToastStack({
         {toasts.map((t) => {
           const styles =
             t.type === "ok"
-              ? "border-emerald-500/45 bg-white/95 text-slate-900 dark:bg-slate-950/95 dark:text-emerald-100"
+              ? "border-emerald-500/45 bg-white text-slate-900 dark:bg-[#0d1321] dark:text-emerald-100"
               : t.type === "error"
-                ? "border-rose-500/50 bg-white/95 text-slate-900 dark:bg-slate-950/95 dark:text-rose-100"
-                : "border-sky-500/45 bg-white/95 text-slate-900 dark:bg-slate-950/95 dark:text-sky-100";
+                ? "border-rose-500/50 bg-white text-slate-900 dark:bg-[#0d1321] dark:text-rose-100"
+                : "border-sky-500/45 bg-white text-slate-900 dark:bg-[#0d1321] dark:text-sky-100";
 
           const Icon =
             t.type === "ok" ? CheckCircle2 : t.type === "error" ? AlertTriangle : Info;
@@ -41,18 +41,18 @@ export function ToastStack({
           return (
             <motion.div
               key={t.id}
-              layout
-              initial={{ opacity: 0, y: 20, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 40, scale: 0.96 }}
-              transition={{ type: "spring", stiffness: 420, damping: 30 }}
-              className={`pointer-events-auto flex items-start gap-3 rounded-2xl border p-3.5 shadow-2xl backdrop-blur-xl ${styles}`}
+              layout="position"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, x: 24 }}
+              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              className={`pointer-events-auto flex items-start gap-3 rounded-2xl border p-3.5 shadow-[0_18px_40px_-12px_rgba(15,23,42,0.28)] dark:shadow-[0_20px_50px_-12px_rgba(0,0,0,0.8)] ${styles}`}
             >
               <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconColor}`} />
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-bold">{t.title}</div>
+                <div className="text-xs leading-4 font-bold">{t.title}</div>
                 {t.detail && (
-                  <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300/85">
+                  <p className="mt-0.5 text-[11px] leading-4 text-slate-600 dark:text-slate-300/85">
                     {t.detail}
                   </p>
                 )}
@@ -60,7 +60,7 @@ export function ToastStack({
               <button
                 type="button"
                 onClick={() => onDismiss(t.id)}
-                className="rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10 dark:hover:text-white"
+                className="cursor-pointer rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-white/10 dark:hover:text-white"
                 aria-label="Dismiss notification"
               >
                 <X className="h-3.5 w-3.5" />
