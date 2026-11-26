@@ -650,11 +650,11 @@ export function FinOpsDialGauge({
 }
 
 /* ============================================================================
-6. LivePipelineRail — Real-Time 5-Stage LangGraph Visualizer with Active Sweep
+6. LivePipelineRail — Synced 5-Stage LangGraph Visualizer + 100% Completion Sweep
    ============================================================================ */
 const RAIL_NODES = [
   { label: "Forensics", detail: "OWASP PDF & White-Text Scan", Icon: ShieldAlert },
-  { label: "Vision OCR", detail: "Gemini Multimodal Extraction", Icon: FileSearch },
+  { label: "Vision OCR", detail: "Gemini 4 Hydrogen OCR", Icon: FileSearch },
   { label: "3-Way Match", detail: "Decimal PO, GR & IBAN Check", Icon: Cpu },
   { label: "MSA RAG", detail: "pgvector Clause Verification", Icon: Sparkles },
   { label: "Policy Gate", detail: "LangGraph Checkpoint / XML", Icon: ShieldCheck },
@@ -663,25 +663,48 @@ const RAIL_NODES = [
 export function LivePipelineRail({
   activeStageIdx,
   stageMessage,
+  completed = false,
 }: {
   activeStageIdx: number;
   stageMessage: string;
+  completed?: boolean;
 }) {
-  const progressPct = Math.min(96, Math.round(((activeStageIdx + 0.65) / RAIL_NODES.length) * 100));
+  const progressPct = completed
+    ? 100
+    : Math.min(92, Math.round(((activeStageIdx + 0.6) / RAIL_NODES.length) * 100));
 
   return (
-    <SpotlightCard tone="cyan" className="border-sky-500/35 p-4 dark:border-sky-400/30">
+    <SpotlightCard
+      tone={completed ? "emerald" : "cyan"}
+      className={`p-4 transition-colors duration-200 ${
+        completed
+          ? "border-emerald-500/45 dark:border-emerald-400/40"
+          : "border-sky-500/35 dark:border-sky-400/30"
+      }`}
+    >
       <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-500" />
-          </span>
+          {completed ? (
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+              <Check className="h-3 w-3" />
+            </span>
+          ) : (
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-sky-500" />
+            </span>
+          )}
           <span className="text-xs font-bold text-slate-900 dark:text-white">
             Live LangGraph Execution Pipeline
           </span>
         </div>
-        <span className="font-mono text-[11px] font-medium text-sky-600 tabular-nums dark:text-sky-300">
+        <span
+          className={`font-mono text-[11px] font-medium tabular-nums ${
+            completed
+              ? "text-emerald-600 dark:text-emerald-300"
+              : "text-sky-600 dark:text-sky-300"
+          }`}
+        >
           {stageMessage}
         </span>
       </div>
@@ -691,31 +714,41 @@ export function LivePipelineRail({
         <motion.div
           initial={{ width: "8%" }}
           animate={{ width: `${progressPct}%` }}
-          transition={{ type: "spring", stiffness: 90, damping: 20 }}
-          className="relative h-full overflow-hidden rounded-full bg-linear-to-r from-emerald-500 via-sky-500 to-cyan-400"
+          transition={
+            completed
+              ? { duration: 0.28, ease: [0.16, 1, 0.3, 1] }
+              : { type: "spring", stiffness: 100, damping: 22 }
+          }
+          className={`relative h-full overflow-hidden rounded-full ${
+            completed
+              ? "bg-linear-to-r from-emerald-500 to-teal-400"
+              : "bg-linear-to-r from-emerald-500 via-sky-500 to-cyan-400"
+          }`}
         >
-          <motion.span
-            aria-hidden="true"
-            animate={{ x: ["-100%", "220%"] }}
-            transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
-            className="absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-white/55 to-transparent"
-          />
+          {!completed && (
+            <motion.span
+              aria-hidden="true"
+              animate={{ x: ["-100%", "220%"] }}
+              transition={{ repeat: Infinity, duration: 1.4, ease: "linear" }}
+              className="absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-white/55 to-transparent"
+            />
+          )}
         </motion.div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         {RAIL_NODES.map((node, idx) => {
           const Icon = node.Icon;
-          const completed = idx < activeStageIdx;
-          const active = idx === activeStageIdx;
+          const isDone = completed || idx < activeStageIdx;
+          const active = !completed && idx === activeStageIdx;
           return (
             <div
               key={node.label}
               className={`relative overflow-hidden rounded-xl border px-3 py-2.5 transition-colors duration-200 ${
                 active
                   ? "border-sky-500/65 bg-sky-500/10 shadow-[0_0_24px_-10px_rgba(14,165,233,0.75)] dark:bg-sky-500/15"
-                  : completed
-                    ? "border-emerald-500/40 bg-emerald-500/10"
+                  : isDone
+                    ? "border-emerald-500/45 bg-emerald-500/10"
                     : "border-slate-200/80 bg-slate-100/70 opacity-60 dark:border-slate-800 dark:bg-slate-900/50"
               }`}
             >
@@ -723,7 +756,7 @@ export function LivePipelineRail({
                 <motion.span
                   aria-hidden="true"
                   animate={{ x: ["-120%", "220%"] }}
-                  transition={{ repeat: Infinity, duration: 1.8, ease: "linear" }}
+                  transition={{ repeat: Infinity, duration: 1.6, ease: "linear" }}
                   className="pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-sky-400/20 to-transparent"
                 />
               )}
@@ -732,12 +765,12 @@ export function LivePipelineRail({
                   className={`h-3.5 w-3.5 ${
                     active
                       ? "text-sky-600 dark:text-sky-300"
-                      : completed
+                      : isDone
                         ? "text-emerald-600 dark:text-emerald-400"
                         : "text-slate-400"
                   }`}
                 />
-                {completed ? (
+                {isDone ? (
                   <Check className="h-3.5 w-3.5 text-emerald-500" />
                 ) : active ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500 dark:text-sky-300" />
@@ -819,8 +852,8 @@ export function SandboxDrawer({
                   </span>
                 </div>
                 <p className="mt-1 text-xs leading-4 text-slate-500 dark:text-slate-400">
-                  Fire realistic sample payloads through the live FastAPI + Gemini + PostgreSQL
-                  pipeline to test auto-settlement, HITL pauses, and fraud defense.
+                  Fire realistic sample payloads through the live FastAPI + Gemini 4 Hydrogen +
+                  PostgreSQL pipeline to test auto-settlement, HITL pauses, and fraud defense.
                 </p>
               </div>
               <button

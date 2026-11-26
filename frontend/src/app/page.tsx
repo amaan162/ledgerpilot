@@ -128,7 +128,7 @@ const PRESET_CARDS: PresetSpec[] = [
 
 const PIPELINE_STAGES = [
   "Scanning PDF bytes for active exploits, white text & metadata injections...",
-  "Running Gemini Multimodal Vision extraction with schema verification...",
+  "Running Gemini 4 Hydrogen multimodal extraction with schema lock...",
   "Executing deterministic Decimal 3-Way Match, OFAC & IBAN verification...",
   "Retrieving vendor-isolated pgvector MSA clauses & auditing compliance...",
   "Applying Policy Gate & persisting LangGraph PostgreSQL checkpoint...",
@@ -181,12 +181,33 @@ function hasControllerClearance(p: Persona): boolean {
   return /controller|admin/i.test(`${p.key} ${p.roleTitle}`);
 }
 
-function stageForElapsedSeconds(elapsedSec: number): number {
-  if (elapsedSec < 2) return 0;
-  if (elapsedSec < 9) return 1;
-  if (elapsedSec < 14) return 2;
-  if (elapsedSec < 21) return 3;
+function stageForElapsedMs(elapsedMs: number): number {
+  if (elapsedMs < 1200) return 0;
+  if (elapsedMs < 4800) return 1;
+  if (elapsedMs < 7600) return 2;
+  if (elapsedMs < 11500) return 3;
   return 4;
+}
+
+function isLangGraphAction(action: string | null): boolean {
+  if (!action) return false;
+  return action !== "delete" && action !== "fraud-hold" && !action.startsWith("esc-");
+}
+
+function optimisticDetailFromSummary(inv: InvoiceSummary): InvoiceDetail {
+  return {
+    ...inv,
+    subtotal_amount: null,
+    tax_amount: null,
+    extracted_iban: null,
+    extracted_payload: {},
+    security_report: {},
+    match_report: {},
+    rag_citations: [],
+    thread_id: "",
+    settlement_xml_path: null,
+    audit_logs: [],
+  };
 }
 
 export default function CommandCenterPage() {
@@ -223,7 +244,8 @@ export default function CommandCenterPage() {
   const [wakeAttempts, setWakeAttempts] = useState(0);
 
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [busyElapsedSec, setBusyElapsedSec] = useState(0);
+  const [busyElapsedMs, setBusyElapsedMs] = useState(0);
+  const [pipelineCompleting, setPipelineCompleting] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [decisionReason, setDecisionReason] = useState<Record<string, string>>({});
 
@@ -236,8 +258,17 @@ export default function CommandCenterPage() {
   const pendingScrollTargetRef = useRef<ScrollTarget | null>(null);
   const selectedInvoiceIdRef = useRef<string | null>(null);
 
-  const liveStageIdx = stageForElapsedSeconds(busyElapsedSec);
-  const liveStageMessage = `${PIPELINE_STAGES[liveStageIdx]} (${busyElapsedSec}s elapsed)`;
+  // Lightspeed 0ms in-memory dossier & XML cache + deduplicated inflight prefetch tracker
+  const dossierCacheRef = useRef>(new Map());
+  const xmlCacheRef = useRef>(new Map());
+  const inflightPrefetchRef = useRef>>(new Map());
+  const selectSeqRef = useRef(0);
+
+  const showPipelineRail = isLangGraphAction(busyAction) || pipelineCompleting;
+  const liveStageIdx = pipelineCompleting ? PIPELINE_STAGES.length : stageForElapsedMs(busyElapsedMs);
+  const liveStageMessage = pipelineCompleting
+    ? "All 5 stages verified & persisted — opening Audit Dossier..."
+    : `${PIPELINE_STAGES[liveStageIdx]} (${(busyElapsedMs / 1000).toFixed(1)}s)`;
 
   useEffect(() => {
     selectedInvoiceIdRef.current = selectedInvoice?.id ?? null;
@@ -275,21 +306,84 @@ export default function CommandCenterPage() {
     [executePendingScroll, workspace]
   );
 
-  // Bring the live pipeline rail into view when an upload or preset starts
+  // Smoothly scroll pipeline rail into view only for actual LangGraph pipeline runs
   useEffect(() => {
-    if (busyAction && window.scrollY > 100) {
+    if (isLangGraphAction(busyAction) && window.scrollY > 100) {
       window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     }
   }, [busyAction]);
 
-  // Live 1-second timer while an invoice workflow is running
+  // Smooth 250ms clock for responsive LangGraph pipeline progression
   useEffect(() => {
-    if (!busyAction) return;
+    if (!isLangGraphAction(busyAction) || pipelineCompleting) return;
+    const startedAt = performance.now();
     const timer = window.setInterval(() => {
-      setBusyElapsedSec((prev) => prev + 1);
-    }, 1000);
+      setBusyElapsedMs(Math.round(performance.now() - startedAt));
+    }, 250);
     return () => window.clearInterval(timer);
-  }, [busyAction]);
+  }, [busyAction, pipelineCompleting]);
+
+  const finishPipelineSweep = useCallback(async () => {
+    setPipelineCompleting(true);
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 460));
+    setPipelineCompleting(false);
+    setBusyAction(null);
+    setBusyElapsedMs(0);
+  }, []);
+
+  // Fetches detail + XML in parallel and hydrates the 0ms in-memory cache
+  const fetchAndCacheDossier = useCallback(
+    (invoiceId: string, apiKey: string, knownSettlementRef?: string | null, force = false) => {
+      if (!force) {
+        const cached = dossierCacheRef.current.get(invoiceId);
+        if (cached) return Promise.resolve(cached);
+        const existing = inflightPrefetchRef.current.get(invoiceId);
+        if (existing) return existing;
+      }
+
+      const promise = (async () => {
+        try {
+          if (knownSettlementRef) {
+            const [detail, xml] = await Promise.all([
+              api.getInvoiceDetail(apiKey, invoiceId),
+              api.getSettlementXml(apiKey, invoiceId).catch(() => null),
+            ]);
+            dossierCacheRef.current.set(invoiceId, detail);
+            xmlCacheRef.current.set(invoiceId, xml);
+            return detail;
+          }
+
+          const detail = await api.getInvoiceDetail(apiKey, invoiceId);
+          dossierCacheRef.current.set(invoiceId, detail);
+          if (detail.settlement_reference) {
+            const xml = await api.getSettlementXml(apiKey, invoiceId).catch(() => null);
+            xmlCacheRef.current.set(invoiceId, xml);
+          } else {
+            xmlCacheRef.current.set(invoiceId, null);
+          }
+          return detail;
+        } catch {
+          return null;
+        } finally {
+          inflightPrefetchRef.current.delete(invoiceId);
+        }
+      })();
+
+      inflightPrefetchRef.current.set(invoiceId, promise);
+      return promise;
+    },
+    []
+  );
+
+  const prefetchTopInvoices = useCallback(
+    (list: InvoiceSummary[], apiKey: string) => {
+      const candidates = list.slice(0, 10);
+      void Promise.allSettled(
+        candidates.map((inv) => fetchAndCacheDossier(inv.id, apiKey, inv.settlement_reference))
+      );
+    },
+    [fetchAndCacheDossier]
+  );
 
   const toggleTheme = useCallback(() => {
     const next = theme === "dark" ? "light" : "dark";
@@ -366,7 +460,6 @@ export default function CommandCenterPage() {
       }, 2500);
 
       try {
-        // Only call Controller/Admin-only endpoints when active persona has clearance
         const [mRes, invRes, appRes, evRes, venRes, dlqRes, secRes] = await Promise.allSettled([
           api.getMetrics(persona.apiKey),
           api.listInvoices(persona.apiKey),
@@ -457,18 +550,24 @@ export default function CommandCenterPage() {
           // Ignore storage quota errors
         }
 
+        // Warm the 0ms in-memory dossier cache for the top invoices immediately in the background
+        prefetchTopInvoices(invList, persona.apiKey);
+
         const stillExists =
           selectedInvoiceIdRef.current &&
           invList.some((item) => item.id === selectedInvoiceIdRef.current);
         const targetId = selectId || (stillExists ? selectedInvoiceIdRef.current : invList[0]?.id);
         if (targetId) {
-          const detail = await api.getInvoiceDetail(persona.apiKey, targetId);
-          setSelectedInvoice(detail);
-          if (detail.settlement_reference) {
-            const xml = await api.getSettlementXml(persona.apiKey, detail.id);
-            setSettlementXml(xml);
-          } else {
-            setSettlementXml(null);
+          const summaryMatch = invList.find((item) => item.id === targetId);
+          const freshDetail = await fetchAndCacheDossier(
+            targetId,
+            persona.apiKey,
+            summaryMatch?.settlement_reference,
+            Boolean(selectId)
+          );
+          if (freshDetail) {
+            setSelectedInvoice(freshDetail);
+            setSettlementXml(xmlCacheRef.current.get(targetId) ?? null);
           }
         } else {
           setSelectedInvoice(null);
@@ -485,7 +584,7 @@ export default function CommandCenterPage() {
         setSyncing(false);
       }
     },
-    [persona, pushToast]
+    [fetchAndCacheDossier, persona, prefetchTopInvoices, pushToast]
   );
 
   // Sequential /health polling (only 1 request in flight -> zero duplicate toasts)
@@ -553,84 +652,117 @@ export default function CommandCenterPage() {
     });
   }, [invoices, searchQuery, statusFilter]);
 
-  const handleSelectInvoice = async (invoiceId: string, jumpToLedger = false) => {
-    try {
-      const detail = await api.getInvoiceDetail(persona.apiKey, invoiceId);
-      setSelectedInvoice(detail);
-      if (detail.settlement_reference) {
-        const xml = await api.getSettlementXml(persona.apiKey, detail.id);
-        setSettlementXml(xml);
-      } else {
+  // Lightspeed 0ms invoice selector: instant RAM cache hit or instant optimistic shell + parallel hydrate
+  const handleSelectInvoice = useCallback(
+    (invoiceId: string, jumpToLedger = false) => {
+      const reqSeq = ++selectSeqRef.current;
+      const summaryMatch = invoices.find((item) => item.id === invoiceId);
+      const cachedDetail = dossierCacheRef.current.get(invoiceId);
+      const cachedXml = xmlCacheRef.current.get(invoiceId) ?? null;
+
+      if (cachedDetail) {
+        setSelectedInvoice(cachedDetail);
+        setSettlementXml(cachedXml);
+      } else if (summaryMatch) {
+        setSelectedInvoice(optimisticDetailFromSummary(summaryMatch));
         setSettlementXml(null);
       }
+
       if (jumpToLedger) {
         navigateWorkspace("ledger", "dossier");
       } else if (window.innerWidth < 1024 && dossierRef.current) {
         dossierRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
       }
-    } catch (err) {
-      pushToast(
-        "error",
-        "Unable to Load Dossier",
-        err instanceof Error ? err.message : "Failed to fetch invoice details."
-      );
-    }
-  };
+
+      // If not cached yet (or cached without audit logs), hydrate silently in parallel
+      if (!cachedDetail) {
+        void fetchAndCacheDossier(
+          invoiceId,
+          persona.apiKey,
+          summaryMatch?.settlement_reference
+        ).then((fresh) => {
+          if (reqSeq !== selectSeqRef.current) return;
+          if (fresh) {
+            setSelectedInvoice(fresh);
+            setSettlementXml(xmlCacheRef.current.get(invoiceId) ?? null);
+          } else {
+            pushToast("error", "Unable to Load Dossier", "Failed to fetch invoice details.");
+          }
+        });
+      }
+    },
+    [fetchAndCacheDossier, invoices, navigateWorkspace, persona.apiKey, pushToast]
+  );
 
   const handleRunPreset = useCallback(
     async (preset: DemoPreset) => {
-      setBusyElapsedSec(0);
+      setBusyElapsedMs(0);
+      setPipelineCompleting(false);
       setBusyAction(preset);
       try {
         const detail = await api.runDemoPreset(persona.apiKey, preset);
+        const xmlPromise = detail.settlement_reference
+          ? api.getSettlementXml(persona.apiKey, detail.id).catch(() => null)
+          : Promise.resolve(null);
+
+        const [xml] = await Promise.all([xmlPromise, finishPipelineSweep()]);
+        dossierCacheRef.current.set(detail.id, detail);
+        xmlCacheRef.current.set(detail.id, xml);
         setSelectedInvoice(detail);
-        if (detail.settlement_reference) {
-          const xml = await api.getSettlementXml(persona.apiKey, detail.id);
-          setSettlementXml(xml);
-        } else {
-          setSettlementXml(null);
-        }
+        setSettlementXml(xml);
+
         pushToast(
           detail.status === "QUARANTINED_FRAUD_RISK" ? "error" : "ok",
           `Pipeline Complete \u2192 ${detail.status.replaceAll("_", " ")}`,
-          `${detail.invoice_number || detail.original_filename} processed in ${detail.processing_ms}ms ($${Number(detail.llm_cost_usd).toFixed(5)}).`
+          `${detail.invoice_number || detail.original_filename} processed in ${detail.processing_ms.toLocaleString("en-US")} ms ($${Number(detail.llm_cost_usd).toFixed(5)}).`
         );
         setStatusFilter("ALL");
         navigateWorkspace("ledger", "dossier");
-        await loadWorkspace(detail.id);
+        void loadWorkspace(detail.id);
       } catch (err) {
+        setPipelineCompleting(false);
+        setBusyAction(null);
+        setBusyElapsedMs(0);
         pushToast(
           "error",
           "Pipeline Execution Failed",
           err instanceof Error ? err.message : String(err)
         );
-      } finally {
-        setBusyAction(null);
-        setBusyElapsedSec(0);
       }
     },
-    [loadWorkspace, navigateWorkspace, persona.apiKey, pushToast]
+    [finishPipelineSweep, loadWorkspace, navigateWorkspace, persona.apiKey, pushToast]
   );
 
   const processUploadedFile = async (file: File) => {
-    setBusyElapsedSec(0);
+    setBusyElapsedMs(0);
+    setPipelineCompleting(false);
     setBusyAction("upload");
     try {
       const detail = await api.uploadAndProcessInvoice(persona.apiKey, file);
+      const xmlPromise = detail.settlement_reference
+        ? api.getSettlementXml(persona.apiKey, detail.id).catch(() => null)
+        : Promise.resolve(null);
+
+      const [xml] = await Promise.all([xmlPromise, finishPipelineSweep()]);
+      dossierCacheRef.current.set(detail.id, detail);
+      xmlCacheRef.current.set(detail.id, xml);
       setSelectedInvoice(detail);
+      setSettlementXml(xml);
+
       pushToast("ok", `Processed ${file.name}`, `Outcome: ${detail.status.replaceAll("_", " ")}`);
       setStatusFilter("ALL");
       navigateWorkspace("ledger", "dossier");
-      await loadWorkspace(detail.id);
+      void loadWorkspace(detail.id);
     } catch (err) {
+      setPipelineCompleting(false);
+      setBusyAction(null);
+      setBusyElapsedMs(0);
       pushToast(
         "error",
         "Upload Blocked / Failed",
         err instanceof Error ? err.message : String(err)
       );
     } finally {
-      setBusyAction(null);
-      setBusyElapsedSec(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -657,10 +789,23 @@ export default function CommandCenterPage() {
         ? `Verified and approved by ${persona.label} (${persona.roleTitle}).`
         : `Rejected by ${persona.label} pending vendor reconciliation.`);
 
-    setBusyElapsedSec(0);
-    setBusyAction(req.id);
+    setBusyElapsedMs(0);
+    setPipelineCompleting(false);
+    setBusyAction(`approve:${req.id}`);
     try {
       const res = await api.decideApproval(persona.apiKey, req.id, decision, reason);
+      dossierCacheRef.current.delete(req.invoice_id);
+      xmlCacheRef.current.delete(req.invoice_id);
+
+      const [fresh] = await Promise.all([
+        fetchAndCacheDossier(req.invoice_id, persona.apiKey, res.settlement_reference, true),
+        finishPipelineSweep(),
+      ]);
+      if (fresh) {
+        setSelectedInvoice(fresh);
+        setSettlementXml(xmlCacheRef.current.get(req.invoice_id) ?? null);
+      }
+
       pushToast(
         "ok",
         decision === "APPROVED"
@@ -670,25 +815,25 @@ export default function CommandCenterPage() {
           ? `ISO 20022 wire staged: ${res.settlement_reference}`
           : "Decision logged immutably to PostgreSQL."
       );
-      await loadWorkspace(req.invoice_id);
       navigateWorkspace("ledger", "dossier");
+      void loadWorkspace(req.invoice_id);
     } catch (err) {
+      setPipelineCompleting(false);
+      setBusyAction(null);
+      setBusyElapsedMs(0);
       pushToast(
         "error",
         "Backend Governance Guard Blocked Action",
         err instanceof Error ? err.message : String(err)
       );
-    } finally {
-      setBusyAction(null);
-      setBusyElapsedSec(0);
     }
   };
 
   const handleEscalateSla = async (req: ApprovalRequestItem) => {
-    setBusyElapsedSec(0);
     setBusyAction(`esc-${req.id}`);
     try {
       await api.escalateApproval(persona.apiKey, req.id);
+      dossierCacheRef.current.delete(req.invoice_id);
       pushToast(
         "info",
         "SLA Escalated to Corporate Controller",
@@ -703,16 +848,15 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
-      setBusyElapsedSec(0);
     }
   };
 
   const handleConfirmFraudHold = async () => {
     if (!selectedInvoice || holdReason.trim().length < 5) return;
-    setBusyElapsedSec(0);
     setBusyAction("fraud-hold");
     try {
       await api.placeFraudHold(persona.apiKey, selectedInvoice.id, holdReason.trim());
+      dossierCacheRef.current.delete(selectedInvoice.id);
       pushToast(
         "error",
         "Manual Fraud Quarantine Applied",
@@ -729,7 +873,6 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
-      setBusyElapsedSec(0);
     }
   };
 
@@ -737,20 +880,34 @@ export default function CommandCenterPage() {
     if (!selectedInvoice) return;
     const targetId = selectedInvoice.id;
     const label = selectedInvoice.invoice_number || selectedInvoice.original_filename;
-    setBusyElapsedSec(0);
     setBusyAction("delete");
     try {
       await api.deleteInvoice(persona.apiKey, targetId);
       setDeleteModalOpen(false);
-      selectedInvoiceIdRef.current = null;
-      setSelectedInvoice(null);
-      setSettlementXml(null);
+      dossierCacheRef.current.delete(targetId);
+      xmlCacheRef.current.delete(targetId);
+
+      // Instant optimistic ledger update (0ms removal, no pipeline rail flash)
+      const remaining = invoices.filter((inv) => inv.id !== targetId);
+      setInvoices(remaining);
+      const nextInv = remaining[0];
+      if (nextInv) {
+        const cachedNext = dossierCacheRef.current.get(nextInv.id);
+        selectedInvoiceIdRef.current = nextInv.id;
+        setSelectedInvoice(cachedNext ?? optimisticDetailFromSummary(nextInv));
+        setSettlementXml(xmlCacheRef.current.get(nextInv.id) ?? null);
+      } else {
+        selectedInvoiceIdRef.current = null;
+        setSelectedInvoice(null);
+        setSettlementXml(null);
+      }
+
       pushToast(
         "ok",
         `Archived & Removed ${label}`,
         "SOX 404 HMAC audit trail preserved; SHA-256 lock released for clean re-upload."
       );
-      await loadWorkspace();
+      void loadWorkspace();
     } catch (err) {
       pushToast(
         "error",
@@ -759,26 +916,37 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
-      setBusyElapsedSec(0);
     }
   };
 
   const handleRetryInvoice = async (invoiceId: string) => {
-    setBusyElapsedSec(0);
+    setBusyElapsedMs(0);
+    setPipelineCompleting(false);
     setBusyAction("retry");
     try {
       const updated = await api.retryInvoice(persona.apiKey, invoiceId);
+      dossierCacheRef.current.delete(invoiceId);
+      xmlCacheRef.current.delete(invoiceId);
+
+      const [fresh] = await Promise.all([
+        fetchAndCacheDossier(invoiceId, persona.apiKey, updated.settlement_reference, true),
+        finishPipelineSweep(),
+      ]);
+      if (fresh) {
+        setSelectedInvoice(fresh);
+        setSettlementXml(xmlCacheRef.current.get(invoiceId) ?? null);
+      }
       pushToast(
         "ok",
         `Self-Healing Retry Complete \u2192 ${updated.status.replaceAll("_", " ")}`,
         "Workflow re-executed idempotently and audited to PostgreSQL."
       );
-      await loadWorkspace(invoiceId);
+      void loadWorkspace(invoiceId);
     } catch (err) {
-      pushToast("error", "Retry Blocked", err instanceof Error ? err.message : String(err));
-    } finally {
+      setPipelineCompleting(false);
       setBusyAction(null);
-      setBusyElapsedSec(0);
+      setBusyElapsedMs(0);
+      pushToast("error", "Retry Blocked", err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -917,7 +1085,11 @@ export default function CommandCenterPage() {
         label: "Sync Live PostgreSQL State",
         hint: "API Refresh",
         icon: "sync",
-        onSelect: () => void loadWorkspace(),
+        onSelect: () => {
+          dossierCacheRef.current.clear();
+          xmlCacheRef.current.clear();
+          void loadWorkspace();
+        },
       },
     ],
     [
@@ -1176,7 +1348,11 @@ export default function CommandCenterPage() {
 
               <button
                 type="button"
-                onClick={() => void loadWorkspace()}
+                onClick={() => {
+                  dossierCacheRef.current.clear();
+                  xmlCacheRef.current.clear();
+                  void loadWorkspace();
+                }}
                 aria-label="Sync live state"
                 title="Sync Live PostgreSQL State"
                 className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-xl border border-slate-200/90 bg-white/90 text-slate-600 shadow-xs transition-colors hover:border-slate-300 hover:text-slate-950 active:opacity-80 dark:border-slate-700/80 dark:bg-slate-900/90 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white"
@@ -1225,9 +1401,9 @@ export default function CommandCenterPage() {
             )}
           </AnimatePresence>
 
-          {/* Live 5-Stage LangGraph Pipeline Visualizer */}
+          {/* Live 5-Stage LangGraph Pipeline Visualizer (Only for actual LangGraph runs) */}
           <AnimatePresence>
-            {busyAction && (
+            {showPipelineRail && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -1237,6 +1413,7 @@ export default function CommandCenterPage() {
                 <LivePipelineRail
                   activeStageIdx={liveStageIdx}
                   stageMessage={liveStageMessage}
+                  completed={pipelineCompleting}
                 />
               </motion.div>
             )}
@@ -1249,7 +1426,7 @@ export default function CommandCenterPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              transition={{ duration: 0.12 }}
+              transition={{ duration: 0.1 }}
               className="space-y-5"
             >
               {/* ============================================================
@@ -1358,7 +1535,7 @@ export default function CommandCenterPage() {
 
                       <KpiBento
                         label="Total LLM Cost"
-                        sub="Gemini Flash Economics"
+                        sub="Gemini 4 Hydrogen"
                         icon={Cpu}
                         iconTone="text-amber-600 dark:text-amber-400"
                         accent="text-amber-700 dark:text-amber-300"
@@ -1483,7 +1660,14 @@ export default function CommandCenterPage() {
                             <button
                               key={inv.id}
                               type="button"
-                              onClick={() => void handleSelectInvoice(inv.id, true)}
+                              onMouseEnter={() =>
+                                void fetchAndCacheDossier(
+                                  inv.id,
+                                  persona.apiKey,
+                                  inv.settlement_reference
+                                )
+                              }
+                              onClick={() => handleSelectInvoice(inv.id, true)}
                               className="tactile-well group flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-left transition hover:border-blue-500/45"
                             >
                               <div className="min-w-0">
@@ -1533,7 +1717,7 @@ export default function CommandCenterPage() {
               )}
 
               {/* ============================================================
-                  WORKSPACE 2: LEDGER & AUDIT DOSSIER (Equal-Height Columns)
+                  WORKSPACE 2: LEDGER & AUDIT DOSSIER (0ms Instant Switch)
                   ============================================================ */}
               {workspace === "ledger" && (
                 <section className="space-y-4">
@@ -1625,7 +1809,14 @@ export default function CommandCenterPage() {
                                 <button
                                   key={inv.id}
                                   type="button"
-                                  onClick={() => void handleSelectInvoice(inv.id)}
+                                  onMouseEnter={() =>
+                                    void fetchAndCacheDossier(
+                                      inv.id,
+                                      persona.apiKey,
+                                      inv.settlement_reference
+                                    )
+                                  }
+                                  onClick={() => handleSelectInvoice(inv.id)}
                                   className={`w-full cursor-pointer rounded-xl border p-3 text-left transition-colors ${
                                     active
                                       ? "border-indigo-500/60 bg-indigo-500/8 shadow-[0_0_24px_-12px_rgba(99,102,241,0.5)] dark:bg-indigo-500/12"
@@ -1700,13 +1891,7 @@ export default function CommandCenterPage() {
                           </button>
                         </SpotlightCard>
                       ) : (
-                        <motion.div
-                          key={selectedInvoice.id}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ duration: 0.14 }}
-                          className="space-y-4"
-                        >
+                        <div className="space-y-4">
                           <SpotlightCard tone="blue" className="p-5">
                             <div className="space-y-3">
                               {/* Row 1: Invoice Title + Status (Left) | Grand Total (Right) */}
@@ -1980,7 +2165,7 @@ export default function CommandCenterPage() {
                               ))}
                             </div>
                           </SpotlightCard>
-                        </motion.div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -2077,7 +2262,7 @@ export default function CommandCenterPage() {
                             )}
                             <button
                               type="button"
-                              onClick={() => void handleSelectInvoice(req.invoice_id, true)}
+                              onClick={() => handleSelectInvoice(req.invoice_id, true)}
                               className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-sky-600 hover:underline dark:text-sky-400"
                             >
                               Inspect Dossier
@@ -2288,9 +2473,10 @@ export default function CommandCenterPage() {
                 type="button"
                 disabled={holdReason.trim().length < 5 || busyAction !== null}
                 onClick={() => void handleConfirmFraudHold()}
-                className="cursor-pointer rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
               >
-                Confirm Quarantine
+                {busyAction === "fraud-hold" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {busyAction === "fraud-hold" ? "Applying..." : "Confirm Quarantine"}
               </button>
             </div>
           </div>
@@ -2347,8 +2533,9 @@ export default function CommandCenterPage() {
                 type="button"
                 disabled={busyAction !== null}
                 onClick={() => void handleConfirmDeleteInvoice()}
-                className="cursor-pointer rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
               >
+                {busyAction === "delete" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                 {busyAction === "delete" ? "Archiving..." : "Confirm Delete"}
               </button>
             </div>
