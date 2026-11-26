@@ -1708,36 +1708,40 @@ export default function CommandCenterPage() {
                           className="space-y-4"
                         >
                           <SpotlightCard tone="blue" className="p-5">
-                            <div className="flex flex-wrap items-start justify-between gap-4">
-                              <div>
-                                <div className="flex flex-wrap items-center gap-2.5">
-                                  <h2 className="font-mono text-lg font-bold text-slate-950 dark:text-white">
+                            <div className="space-y-3">
+                              {/* Row 1: Invoice Title + Status (Left) | Grand Total (Right) */}
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+                                  <h2 className="truncate font-mono text-lg font-bold text-slate-950 dark:text-white">
                                     {selectedInvoice.invoice_number ||
                                       selectedInvoice.original_filename}
                                   </h2>
                                   <span
-                                    className={`rounded-full border px-2.5 py-0.5 font-mono text-xs font-semibold ${
+                                    className={`shrink-0 rounded-full border px-2.5 py-0.5 font-mono text-xs font-semibold ${
                                       STATUS_BADGE[selectedInvoice.status] || STATUS_BADGE.RECEIVED
                                     }`}
                                   >
                                     {selectedInvoice.status}
                                   </span>
                                 </div>
-                                <p className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
+
+                                <div className="shrink-0 font-mono text-2xl font-bold text-slate-950 tabular-nums dark:text-white">
+                                  {selectedInvoice.total_amount
+                                    ? `${selectedInvoice.currency || "USD"} ${selectedInvoice.total_amount}`
+                                    : "Pending"}
+                                </div>
+                              </div>
+
+                              {/* Row 2: Metadata (Left) | Action Buttons Flush-Right */}
+                              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200/75 pt-3 dark:border-slate-800/80">
+                                <p className="font-mono text-xs text-slate-500 dark:text-slate-400">
                                   PO: {selectedInvoice.po_number || "N/A"} &middot; IBAN:{" "}
                                   {selectedInvoice.extracted_iban || "N/A"} &middot; Cost: $
                                   {Number(selectedInvoice.llm_cost_usd).toFixed(5)} &middot;
                                   Latency: {selectedInvoice.processing_ms.toLocaleString("en-US")} ms
                                 </p>
-                              </div>
 
-                              <div className="flex flex-col items-end gap-2">
-                                <div className="font-mono text-2xl font-bold text-slate-950 tabular-nums dark:text-white">
-                                  {selectedInvoice.total_amount
-                                    ? `${selectedInvoice.currency || "USD"} ${selectedInvoice.total_amount}`
-                                    : "Pending"}
-                                </div>
-                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                <div className="flex shrink-0 flex-wrap items-center gap-2">
                                   {(selectedInvoice.status === "RECEIVED" ||
                                     selectedInvoice.status === "FAILED") && (
                                     <button
