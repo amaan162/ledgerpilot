@@ -1,7 +1,9 @@
 "use client";
 
+import { Fragment } from "react";
 import { motion } from "framer-motion";
 import {
+  ArrowRight,
   CheckCircle2,
   Clock,
   FileCode2,
@@ -100,58 +102,63 @@ export function WorkflowStepper({ invoice }: WorkflowStepperProps) {
   ];
 
   const badgeStyles: Record<NodeStatus, string> = {
-    done: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_20px_-8px_rgba(16,185,129,0.5)]",
-    warn: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-    paused:
-      "border-sky-400/60 bg-sky-500/15 text-sky-200 shadow-[0_0_24px_-6px_rgba(56,189,248,0.6)]",
-    danger:
-      "border-rose-500/60 bg-rose-500/15 text-rose-200 shadow-[0_0_24px_-6px_rgba(244,63,94,0.55)]",
-    idle: "border-slate-800 bg-slate-900/60 text-slate-400",
+    done: "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+    warn: "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+    paused: "border-cyan-500/50 bg-cyan-500/12 text-cyan-700 dark:text-cyan-200",
+    danger: "border-rose-500/45 bg-rose-500/12 text-rose-700 dark:text-rose-200",
+    idle: "border-slate-200 bg-white/75 text-slate-500 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-400",
   };
 
   return (
-    <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4">
+    <div className="tactile-well rounded-xl p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-          <span className="h-2 w-2 rounded-full bg-emerald-400" />
+        <span className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400">
+          <span className="h-2 w-2 rounded-full bg-emerald-500" />
           LangGraph PostgreSQL-Checkpointed State Machine
         </span>
-        <span className="rounded bg-slate-900 px-2 py-0.5 font-mono text-[11px] text-slate-400">
+        <span className="rounded-md bg-white/85 px-2 py-0.5 font-mono text-[10px] text-slate-600 ring-1 ring-slate-900/5 dark:bg-slate-900 dark:text-slate-400 dark:ring-white/10">
           thread: {invoice.thread_id}
         </span>
       </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-5">
+
+      <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr_auto_1fr]">
         {nodes.map((node, index) => {
           const Icon = node.Icon;
           return (
-            <motion.div
-              key={`${invoice.id}-${node.id}`}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.06, duration: 0.25 }}
-              whileHover={{ y: -2 }}
-              className="relative flex items-center"
-            >
-              <div
-                className={`relative flex w-full flex-col gap-1 overflow-hidden rounded-lg border px-3 py-2.5 transition-colors ${badgeStyles[node.status]}`}
+            <Fragment key={`${invoice.id}-${node.id}`}>
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.045, duration: 0.18, ease: "easeOut" }}
+                className={`relative flex min-w-0 flex-col gap-1 overflow-hidden rounded-xl border px-3 py-2.5 transition-colors ${badgeStyles[node.status]}`}
               >
                 {node.status === "paused" && (
                   <motion.span
                     animate={{ opacity: [0.35, 1, 0.35] }}
                     transition={{ repeat: Infinity, duration: 1.8 }}
-                    className="absolute top-2 right-2 h-2 w-2 rounded-full bg-sky-400"
+                    className="absolute top-2.5 right-2.5 h-2 w-2 rounded-full bg-cyan-500"
                   />
                 )}
-                <div className="flex items-center gap-2">
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span className="truncate text-xs font-semibold">{node.title}</span>
+                <div className="flex items-center justify-between gap-1.5">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate text-xs font-bold">{node.title}</span>
+                  </div>
+                  {node.status !== "paused" && (
+                    <span className="shrink-0 font-mono text-[9px] opacity-55">
+                      0{index + 1}
+                    </span>
+                  )}
                 </div>
-                <span className="truncate font-mono text-[11px] opacity-80">{node.sub}</span>
-              </div>
+                <span className="truncate font-mono text-[10px] opacity-80">{node.sub}</span>
+              </motion.div>
+
               {index < nodes.length - 1 && (
-                <div className="hidden px-1 font-mono text-xs text-slate-600 sm:block">→</div>
+                <div className="hidden items-center justify-center sm:flex">
+                  <ArrowRight className="h-3.5 w-3.5 text-slate-400 dark:text-slate-600" />
+                </div>
               )}
-            </motion.div>
+            </Fragment>
           );
         })}
       </div>
