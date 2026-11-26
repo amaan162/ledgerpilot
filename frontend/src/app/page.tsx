@@ -127,7 +127,7 @@ const PRESET_CARDS: PresetSpec[] = [
 
 const PIPELINE_STAGES = [
   "Scanning PDF bytes for active exploits, white text & metadata injections...",
-  "Running Gemini Multimodal Vision extraction with automatic failover...",
+  "Running Gemini Multimodal Vision extraction with low-latency schema lock...",
   "Executing deterministic Decimal 3-Way Match, OFAC & IBAN verification...",
   "Retrieving vendor-isolated pgvector MSA contract clauses...",
   "Applying Policy Gate & persisting LangGraph PostgreSQL checkpoint...",
@@ -175,6 +175,10 @@ function getThemeServerSnapshot(): "dark" | "light" {
   return "dark";
 }
 
+function hasControllerClearance(p: Persona): boolean {
+  return /controller|admin/i.test(`${p.key} ${p.roleTitle}`);
+}
+
 export default function CommandCenterPage() {
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeServerSnapshot);
   const [workspace, setWorkspace] = useState<Workspace>("command");
@@ -217,6 +221,8 @@ export default function CommandCenterPage() {
   const [holdReason, setHoldReason] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dossierRef = useRef<HTMLDivElement | null>(null);
+  const pendingDossierScrollRef = useRef(false);
   const selectedInvoiceIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -226,6 +232,29 @@ export default function CommandCenterPage() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
+
+  // Always land cleanly at the top when switching workspaces or Intelligence sub-tabs
+  useEffect(() => {
+    if (pendingDossierScrollRef.current && workspace === "ledger") {
+      pendingDossierScrollRef.current = false;
+      window.setTimeout(() => {
+        if (window.innerWidth < 1024 && dossierRef.current) {
+          dossierRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else {
+          window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        }
+      }, 60);
+      return;
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [workspace, intelTab]);
+
+  // Bring the live pipeline rail into view when an upload or preset starts
+  useEffect(() => {
+    if (busyAction && window.scrollY > 120) {
+      window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    }
+  }, [busyAction]);
 
   const toggleTheme = useCallback(() => {
     const next = theme === "dark" ? "light" : "dark";
@@ -237,6 +266,7 @@ export default function CommandCenterPage() {
   const openLedgerWithFilter = useCallback((filter: StatusFilter) => {
     setStatusFilter(filter);
     setWorkspace("ledger");
+    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
   }, []);
 
   useEffect(() => {
@@ -269,17 +299,19 @@ export default function CommandCenterPage() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Advance cleanly forward through stages instead of looping backwards
   useEffect(() => {
     if (!busyAction) return;
     const timer = window.setInterval(() => {
-      setLiveStageIdx((prev) => (prev + 1) % PIPELINE_STAGES.length);
-    }, 850);
+      setLiveStageIdx((prev) => Math.min(prev + 1, PIPELINE_STAGES.length - 1));
+    }, 950);
     return () => window.clearInterval(timer);
   }, [busyAction]);
 
   const loadWorkspace = useCallback(
     async (selectId?: string) => {
       const cacheKey = `lp-cache-v1:${persona.key}`;
+      const isPrivileged = hasControllerClearance(persona);
       setSyncing(true);
 
       try {
@@ -305,14 +337,16 @@ export default function CommandCenterPage() {
       }, 2500);
 
       try {
+        // Only call Controller/Admin-only endpoints when the active persona has clearance
+        // so non-privileged roles never trigger noisy HTTP 403 errors in browser DevTools.
         const [mRes, invRes, appRes, evRes, venRes, dlqRes, secRes] = await Promise.allSettled([
           api.getMetrics(persona.apiKey),
           api.listInvoices(persona.apiKey),
           api.listPendingApprovals(persona.apiKey),
           api.getEvalScorecard(persona.apiKey),
           api.listVendors(persona.apiKey),
-          api.listDeadLetters(persona.apiKey),
-          api.getSecurityPosture(persona.apiKey),
+          isPrivileged ? api.listDeadLetters(persona.apiKey) : Promise.resolve(null),
+          isPrivileged ? api.getSecurityPosture(persona.apiKey) : Promise.resolve(null),
         ]);
 
         window.clearTimeout(slowTimer);
@@ -336,18 +370,32 @@ export default function CommandCenterPage() {
         const vendorList = (venRes as PromiseFulfilledResult<VendorRecord[]>).value;
 
         let nextDlq: DeadLetterItem[] = [];
-        let nextDlqForbidden = false;
-        if (dlqRes.status === "fulfilled") {
-          nextDlq = dlqRes.value;
-        } else if (dlqRes.reason instanceof ApiError && dlqRes.reason.status === 403) {
-          nextDlqForbidden = true;
+        let nextDlqForbidden = !isPrivileged;
+        if (isPrivileged) {
+          if (dlqRes.status === "fulfilled" && Array.isArray(dlqRes.value)) {
+            nextDlq = dlqRes.value;
+            nextDlqForbidden = false;
+          } else if (
+            dlqRes.status === "rejected" &&
+            dlqRes.reason instanceof ApiError &&
+            dlqRes.reason.status === 403
+          ) {
+            nextDlqForbidden = true;
+          }
         }
 
         let nextPosture: SecurityPosture | null = null;
-        let nextPostureForbidden = false;
-        if (secRes.status === "fulfilled") {
+        let nextPostureForbidden = !isPrivileged;
+        if (!isPrivileged) {
+          setAuditReport(null);
+        } else if (secRes.status === "fulfilled" && secRes.value) {
           nextPosture = secRes.value;
-        } else if (secRes.reason instanceof ApiError && secRes.reason.status === 403) {
+          nextPostureForbidden = false;
+        } else if (
+          secRes.status === "rejected" &&
+          secRes.reason instanceof ApiError &&
+          secRes.reason.status === 403
+        ) {
           nextPostureForbidden = true;
           setAuditReport(null);
         }
@@ -403,7 +451,7 @@ export default function CommandCenterPage() {
         setSyncing(false);
       }
     },
-    [persona.apiKey, persona.key, pushToast]
+    [persona, pushToast]
   );
 
   // Sequential /health polling (only 1 request in flight -> zero duplicate toasts)
@@ -481,7 +529,12 @@ export default function CommandCenterPage() {
       } else {
         setSettlementXml(null);
       }
-      if (jumpToLedger) setWorkspace("ledger");
+      if (jumpToLedger) {
+        pendingDossierScrollRef.current = true;
+        setWorkspace("ledger");
+      } else if (window.innerWidth < 1024 && dossierRef.current) {
+        dossierRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
     } catch (err) {
       pushToast(
         "error",
@@ -510,6 +563,7 @@ export default function CommandCenterPage() {
           `${detail.invoice_number || detail.original_filename} processed in ${detail.processing_ms}ms ($${Number(detail.llm_cost_usd).toFixed(5)}).`
         );
         setStatusFilter("ALL");
+        pendingDossierScrollRef.current = true;
         setWorkspace("ledger");
         await loadWorkspace(detail.id);
       } catch (err) {
@@ -534,6 +588,7 @@ export default function CommandCenterPage() {
       setSelectedInvoice(detail);
       pushToast("ok", `Processed ${file.name}`, `Outcome: ${detail.status.replaceAll("_", " ")}`);
       setStatusFilter("ALL");
+      pendingDossierScrollRef.current = true;
       setWorkspace("ledger");
       await loadWorkspace(detail.id);
     } catch (err) {
@@ -584,6 +639,7 @@ export default function CommandCenterPage() {
           ? `ISO 20022 wire staged: ${res.settlement_reference}`
           : "Decision logged immutably to PostgreSQL."
       );
+      pendingDossierScrollRef.current = true;
       await loadWorkspace(req.invoice_id);
       setWorkspace("ledger");
     } catch (err) {
@@ -1553,7 +1609,7 @@ export default function CommandCenterPage() {
                       </SpotlightCard>
                     </div>
 
-                    <div className="flex flex-col space-y-4 lg:col-span-8">
+                    <div ref={dossierRef} className="flex scroll-mt-20 flex-col space-y-4 lg:col-span-8">
                       {!selectedInvoice ? (
                         <SpotlightCard
                           tone="blue"

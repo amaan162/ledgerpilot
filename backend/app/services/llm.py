@@ -86,10 +86,31 @@ def l2_normalize(vector: list[float]) -> list[float]:
     return [x / norm for x in vector]
 
 
+def _build_fast_thinking_config(model_name: str):
+    """
+    Lowers internal reasoning overhead for structured OCR and clause checks.
+    gemini-3.8-flash and Gemini 4 models support 'low' (not 'minimal');
+    gemini-3.6-flash and Flash-Lite models support 'minimal' for lowest latency.
+    """
+    if not hasattr(types, "ThinkingConfig"):
+        return None
+    lower = model_name.lower()
+    if "3.8" in lower or "gemini-4" in lower:
+        level = "low"
+    elif "3.6" in lower or "flash-lite" in lower or "3-flash" in lower:
+        level = "minimal"
+    else:
+        return None
+    try:
+        return types.ThinkingConfig(thinking_level=level)
+    except Exception:
+        return None
+
+
 class GeminiLLMService:
     """
-    Production Gemini client with strict schemas, automatic model failover,
-    circuit-breaker protection, daily FinOps spend limits, and cost telemetry.
+    Production Gemini client with strict schemas, low-latency thinking control,
+    automatic model failover, circuit-breaker protection, and cost telemetry.
     """
 
     def __init__(self) -> None:
@@ -124,16 +145,34 @@ class GeminiLLMService:
         contents: Any,
         system_instruction: str,
         response_schema: type,
+        use_fast_thinking: bool = True,
     ):
-        return self.client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                response_schema=response_schema,
-            ),
-        )
+        config_kwargs: dict[str, Any] = {
+            "system_instruction": system_instruction,
+            "response_mime_type": "application/json",
+            "response_schema": response_schema,
+        }
+        if use_fast_thinking:
+            thinking_cfg = _build_fast_thinking_config(model_name)
+            if thinking_cfg is not None:
+                config_kwargs["thinking_config"] = thinking_cfg
+
+        try:
+            return self.client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=types.GenerateContentConfig(**config_kwargs),
+            )
+        except genai_errors.APIError as exc:
+            # If a model rejects thinking_config with HTTP 400, retry once cleanly without it
+            if use_fast_thinking and getattr(exc, "code", None) == 400 and "thinking" in str(exc).lower():
+                config_kwargs.pop("thinking_config", None)
+                return self.client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_kwargs),
+                )
+            raise
 
     def _generate_with_failover(
         self,
