@@ -15,6 +15,7 @@ HARD_QUARANTINE_FLAGS = {
     "OBFUSCATED_TEXT_DETECTED",
     "PDF_ACTIVE_CONTENT_EXPLOIT",
     "IBAN_MISMATCH_FRAUD_RISK",
+    "DUPLICATE_INVOICE_NUMBER_FRAUD_RISK",
     "SANCTIONS_JURISDICTION_BLOCK",
     "VENDOR_FROZEN",
 }
@@ -28,9 +29,11 @@ CONTROLLER_ESCALATION_FLAGS = {
     "PO_VENDOR_MISMATCH",
     "CONTRACT_POLICY_VIOLATION",
     "INSUFFICIENT_CONTRACT_EVIDENCE",
+    "UNSUPPORTED_FX_CURRENCY",
+    "INVALID_INVOICE_AMOUNT",
 }
 
-# Deterministic treasury FX reference table for USD-equivalent spend threshold enforcement
+# Single source of truth for deterministic USD-equivalent threshold enforcement
 FX_TO_USD: dict[str, Decimal] = {
     "USD": Decimal("1.00"),
     "EUR": Decimal("1.09"),
@@ -57,16 +60,22 @@ class PolicyDecision:
     combined_risk_flags: list[str] = field(default_factory=list)
 
 
-def _to_usd_equivalent(amount: Decimal, currency: str | None) -> tuple[Decimal, str]:
+def to_usd_equivalent(amount: Decimal, currency: str | None) -> tuple[Decimal, str]:
     code = (currency or "USD").strip().upper()
     rate = FX_TO_USD.get(code, Decimal("1.00"))
-    usd_val = (amount * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    usd_val = (Decimal(str(amount)) * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return usd_val, code
+
+
+# Backward-compatible alias
+_to_usd_equivalent = to_usd_equivalent
 
 
 def _format_amount_with_fx(amount: Decimal, currency_code: str, usd_equiv: Decimal) -> str:
     if currency_code == "USD":
         return f"USD {amount:.2f}"
+    if currency_code not in FX_TO_USD:
+        return f"{currency_code} {amount:.2f} (FX rate unverified)"
     return f"{currency_code} {amount:.2f} (~USD {usd_equiv:.2f})"
 
 
@@ -90,11 +99,18 @@ def evaluate_ap_policy(
         if len(norm_iban) >= 2 and norm_iban[:2] in SANCTIONED_IBAN_PREFIXES:
             flag_set.add("SANCTIONS_JURISDICTION_BLOCK")
 
+    usd_equiv, currency_code = to_usd_equivalent(extraction.total_amount, extraction.currency)
+
+    # Guard against negative/zero invoice auto-approval or unknown high-value currencies (e.g., KWD)
+    if extraction.total_amount <= Decimal("0.00"):
+        flag_set.add("INVALID_INVOICE_AMOUNT")
+    if currency_code not in FX_TO_USD:
+        flag_set.add("UNSUPPORTED_FX_CURRENCY")
+
     combined_flags = sorted(flag_set)
-    usd_equiv, currency_code = _to_usd_equivalent(extraction.total_amount, extraction.currency)
     amt_label = _format_amount_with_fx(extraction.total_amount, currency_code, usd_equiv)
 
-    # Tier 1: Hard Fraud, Sanctions, or Active-Exploit Quarantine (zero bypass permitted)
+    # Tier 1: Hard Fraud, Sanctions, Duplicate, or Active-Exploit Quarantine (zero bypass permitted)
     quarantine_hits = [f for f in combined_flags if f in HARD_QUARANTINE_FLAGS]
     if quarantine_hits or security_report.prompt_injection_detected:
         return PolicyDecision(

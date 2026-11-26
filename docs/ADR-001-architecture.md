@@ -10,7 +10,7 @@ Accounts Payable (AP) automation initiates irreversible outbound bank wires whil
 ## 2. Core Architectural Decisions
 
 ### Decision A: Strict Deterministic Core vs. Probabilistic Extraction
-* **Choice:** LLMs (Gemini Flash with automatic multi-model failover) are restricted strictly to *unstructured multimodal extraction* and *grounded MSA compliance reasoning*. All financial math (`Decimal` 3-way matching), IBAN verification, OFAC/EU sanctions jurisdiction screening (`IR`, `KP`, `SY`, `CU`, `RU`, `BY`), spend caps, and quarantine routing execute in pure Python.
+* **Choice:** LLMs (Gemini 4 Hydrogen with automatic multi-model failover) are restricted strictly to *unstructured multimodal extraction* and *grounded MSA compliance reasoning*. All financial math (`Decimal` 3-way matching), IBAN verification, OFAC/EU sanctions jurisdiction screening (`IR`, `KP`, `SY`, `CU`, `RU`, `BY`), spend caps, and quarantine routing execute in pure Python.
 * **Consequence:** Even a fully compromised LLM returning `is_compliant=true` cannot override `HIDDEN_WHITE_TEXT_DETECTED`, `PDF_ACTIVE_CONTENT_EXPLOIT`, `SANCTIONS_JURISDICTION_BLOCK`, or `IBAN_MISMATCH_FRAUD_RISK`. Fraud/injection recall remains **100.00%** across the 100-case golden suite.
 
 ### Decision B: Defense-in-Depth Pre-LLM Document & Active-Exploit Gate

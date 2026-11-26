@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import get_logger
@@ -35,6 +36,17 @@ from app.services.rag import evaluate_contract_compliance
 from app.services.settlement import generate_iso20022_pain001
 
 logger = get_logger("ledgerpilot.workflow")
+
+DUPLICATE_INVOICE_FLAG = "DUPLICATE_INVOICE_NUMBER_FRAUD_RISK"
+TERMINAL_OR_PAUSED_STATUSES = {
+    InvoiceStatus.PAYMENT_STAGED,
+    InvoiceStatus.AUTO_APPROVED,
+    InvoiceStatus.AWAITING_APPROVAL,
+    InvoiceStatus.ESCALATED_SLA,
+    InvoiceStatus.QUARANTINED_FRAUD_RISK,
+    InvoiceStatus.REJECTED,
+    InvoiceStatus.CANCELLED,
+}
 
 
 class WorkflowLLMProtocol(Protocol):
@@ -64,7 +76,10 @@ def build_invoice_workflow(
 
     async def scan_security_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         inv_uuid = uuid.UUID(state["invoice_id"])
-        file_bytes = Path(state["stored_file_path"]).read_bytes()
+        stored_path = Path(state["stored_file_path"])
+        if not stored_path.is_file():
+            raise FileNotFoundError(f"Stored invoice file not found: {stored_path}")
+        file_bytes = stored_path.read_bytes()
         report = scan_document_bytes(file_bytes, state["filename"])
         report_dict = report.model_dump(mode="json")
 
@@ -99,7 +114,10 @@ def build_invoice_workflow(
 
     async def extract_invoice_node(state: InvoiceWorkflowState) -> dict[str, Any]:
         inv_uuid = uuid.UUID(state["invoice_id"])
-        file_bytes = Path(state["stored_file_path"]).read_bytes()
+        stored_path = Path(state["stored_file_path"])
+        if not stored_path.is_file():
+            raise FileNotFoundError(f"Stored invoice file not found: {stored_path}")
+        file_bytes = stored_path.read_bytes()
 
         extraction, cost_usd, meta = await _get_llm().extract_invoice(file_bytes, state["filename"])
         extraction_dict = extraction.model_dump(mode="json")
@@ -127,7 +145,7 @@ def build_invoice_workflow(
                     db,
                     invoice_id=inv.id,
                     actor_type=ActorType.AGENT,
-                    actor_id=f"extractor:{meta.get('model', 'gemini')}",
+                    actor_id=f"extractor:{meta.get('model', 'gemini-4-hydrogen')}",
                     action="INVOICE_EXTRACTED",
                     previous_state=prev,
                     new_state=InvoiceStatus.EXTRACTING.value,
@@ -154,14 +172,52 @@ def build_invoice_workflow(
             match_report = await run_deterministic_three_way_match(db, extraction)
             match_dict = match_report.model_dump(mode="json")
 
+            # Cross-file duplicate-payment shield: detects an altered PDF reusing an active
+            # (vendor_id, invoice_number) without tripping uq_invoices_vendor_number_active.
+            duplicate_inv: Invoice | None = None
+            if match_report.vendor_id and extraction.invoice_number:
+                vendor_uuid = uuid.UUID(match_report.vendor_id)
+                duplicate_inv = await db.scalar(
+                    select(Invoice).where(
+                        Invoice.id != inv_uuid,
+                        Invoice.vendor_id == vendor_uuid,
+                        Invoice.invoice_number == extraction.invoice_number,
+                        Invoice.status.not_in([InvoiceStatus.REJECTED, InvoiceStatus.CANCELLED]),
+                    )
+                )
+
+            if duplicate_inv is not None:
+                flags = sorted(set(match_dict.get("risk_flags") or []) | {DUPLICATE_INVOICE_FLAG})
+                match_dict["risk_flags"] = flags
+                match_dict["is_clean_match"] = False
+                variances = list(match_dict.get("line_variances") or [])
+                variances.append(
+                    {
+                        "sku": None,
+                        "description": f"Invoice {extraction.invoice_number}",
+                        "issue": DUPLICATE_INVOICE_FLAG,
+                        "expected_value": "Unique active invoice number per vendor",
+                        "actual_value": (
+                            f"Duplicates active record {str(duplicate_inv.id)[:8]} "
+                            f"({duplicate_inv.status.value})"
+                        ),
+                    }
+                )
+                match_dict["line_variances"] = variances
+                match_dict["summary"] = (
+                    f"Duplicate invoice number '{extraction.invoice_number}' blocked: "
+                    f"already active on record {str(duplicate_inv.id)[:8]} ({duplicate_inv.status.value})."
+                )
+
             inv = await db.scalar(select(Invoice).where(Invoice.id == inv_uuid))
             if inv:
                 prev = inv.status.value
                 inv.status = InvoiceStatus.MATCHING_DETERMINISTIC
-                if match_report.vendor_id:
+                # Only bind vendor_id if no active duplicate exists (keeps DB unique constraint intact)
+                if match_report.vendor_id and duplicate_inv is None:
                     inv.vendor_id = uuid.UUID(match_report.vendor_id)
                 inv.match_report = match_dict
-                inv.risk_flags = sorted(set(inv.risk_flags) | set(match_report.risk_flags))
+                inv.risk_flags = sorted(set(inv.risk_flags) | set(match_dict.get("risk_flags") or []))
                 write_audit_log(
                     db,
                     invoice_id=inv.id,
@@ -171,17 +227,47 @@ def build_invoice_workflow(
                     previous_state=prev,
                     new_state=InvoiceStatus.MATCHING_DETERMINISTIC.value,
                     details={
-                        "is_clean_match": match_report.is_clean_match,
+                        "is_clean_match": match_dict.get("is_clean_match"),
                         "iban_verified": match_report.iban_verified,
-                        "risk_flags": match_report.risk_flags,
+                        "duplicate_of_invoice_id": str(duplicate_inv.id) if duplicate_inv else None,
+                        "risk_flags": match_dict.get("risk_flags", []),
                     },
                 )
-                await db.commit()
+                try:
+                    await db.commit()
+                except IntegrityError:
+                    # Race-condition fallback if two identical invoice numbers committed concurrently
+                    await db.rollback()
+                    inv = await db.scalar(select(Invoice).where(Invoice.id == inv_uuid))
+                    if inv:
+                        match_dict["is_clean_match"] = False
+                        match_dict["risk_flags"] = sorted(
+                            set(match_dict.get("risk_flags") or []) | {DUPLICATE_INVOICE_FLAG}
+                        )
+                        match_dict["summary"] = (
+                            f"Concurrent duplicate invoice number '{extraction.invoice_number}' "
+                            "blocked by PostgreSQL unique-payment shield."
+                        )
+                        inv.vendor_id = None
+                        inv.status = InvoiceStatus.MATCHING_DETERMINISTIC
+                        inv.match_report = match_dict
+                        inv.risk_flags = sorted(set(inv.risk_flags) | set(match_dict["risk_flags"]))
+                        write_audit_log(
+                            db,
+                            invoice_id=inv.id,
+                            actor_type=ActorType.SYSTEM,
+                            actor_id="deterministic_3way_engine",
+                            action="DUPLICATE_INVOICE_RACE_BLOCKED",
+                            previous_state=prev,
+                            new_state=InvoiceStatus.MATCHING_DETERMINISTIC.value,
+                            details={"risk_flags": match_dict["risk_flags"]},
+                        )
+                        await db.commit()
 
         return {
             "status": InvoiceStatus.MATCHING_DETERMINISTIC.value,
             "match_report": match_dict,
-            "risk_flags": sorted(set(state.get("risk_flags", [])) | set(match_report.risk_flags)),
+            "risk_flags": sorted(set(state.get("risk_flags", [])) | set(match_dict.get("risk_flags") or [])),
         }
 
     async def check_contract_node(state: InvoiceWorkflowState) -> dict[str, Any]:
@@ -240,12 +326,25 @@ def build_invoice_workflow(
             contract_report=contract_report,
         )
 
+        combined_flags = sorted(set(decision.combined_risk_flags) | set(state.get("risk_flags", [])))
+        if DUPLICATE_INVOICE_FLAG in combined_flags:
+            return {
+                "policy_outcome": "QUARANTINE",
+                "required_role": None,
+                "sla_hours": None,
+                "policy_reason": (
+                    "Duplicate active invoice number detected for this vendor; "
+                    "quarantined to prevent cross-file double payment."
+                ),
+                "risk_flags": combined_flags,
+            }
+
         return {
             "policy_outcome": decision.outcome,
             "required_role": decision.required_role.value if decision.required_role else None,
             "sla_hours": decision.sla_hours,
             "policy_reason": decision.reason_summary,
-            "risk_flags": decision.combined_risk_flags,
+            "risk_flags": combined_flags,
         }
 
     def route_after_policy(state: InvoiceWorkflowState) -> str:
@@ -375,7 +474,6 @@ def build_invoice_workflow(
         if notify_payload:
             await emit_n8n_event("ledgerpilot-approval-needed", notify_payload)
 
-        # Pause graph cleanly in PostgreSQL checkpoints until Finance Manager / Controller acts
         human_decision = interrupt(
             {
                 "invoice_id": state["invoice_id"],
@@ -510,7 +608,7 @@ async def run_invoice_workflow(
     db_factory = session_factory or AsyncSessionLocal
     async with db_factory() as db:
         inv = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-        if not inv:
+        if not inv or inv.status == InvoiceStatus.CANCELLED:
             raise ValueError(f"Invoice {invoice_id} not found.")
         stored_path = (inv.extracted_payload or {}).get("stored_file_path")
         if not stored_path:
@@ -528,7 +626,31 @@ async def run_invoice_workflow(
     config = {"configurable": {"thread_id": thread_id}}
 
     start_ts = time.perf_counter()
-    result = await graph.ainvoke(initial_state, config=config)
+    try:
+        result = await graph.ainvoke(initial_state, config=config)
+    except Exception as exc:
+        # Transition cleanly to FAILED so the invoice never remains stranded in an intermediate state
+        try:
+            async with db_factory() as db:
+                inv = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
+                if inv and inv.status not in TERMINAL_OR_PAUSED_STATUSES:
+                    prev = inv.status.value
+                    inv.status = InvoiceStatus.FAILED
+                    write_audit_log(
+                        db,
+                        invoice_id=inv.id,
+                        actor_type=ActorType.SYSTEM,
+                        actor_id="workflow_supervisor",
+                        action="WORKFLOW_EXECUTION_FAILED",
+                        previous_state=prev,
+                        new_state=InvoiceStatus.FAILED.value,
+                        details={"error_type": type(exc).__name__},
+                    )
+                    await db.commit()
+        except Exception:
+            logger.exception("workflow_failure_state_persist_failed")
+        raise
+
     elapsed_ms = int((time.perf_counter() - start_ts) * 1000)
 
     async with db_factory() as db:
@@ -553,8 +675,12 @@ async def resume_invoice_workflow(
     db_factory = session_factory or AsyncSessionLocal
     async with db_factory() as db:
         inv = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-        if not inv:
+        if not inv or inv.status == InvoiceStatus.CANCELLED:
             raise ValueError(f"Invoice {invoice_id} not found.")
+        if inv.status not in (InvoiceStatus.AWAITING_APPROVAL, InvoiceStatus.ESCALATED_SLA):
+            raise ValueError(
+                f"Invoice {invoice_id} is in '{inv.status.value}' state and cannot be resumed."
+            )
         thread_id = inv.thread_id
 
     graph = build_invoice_workflow(llm_service=llm_service, session_factory=db_factory)

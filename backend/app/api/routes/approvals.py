@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.logging import get_logger
 from app.core.security import get_current_user, require_roles
 from app.db.models import (
     ActorType,
@@ -22,8 +23,10 @@ from app.db.models import (
 from app.db.session import get_db
 from app.graph.workflow import resume_invoice_workflow
 from app.services.audit import write_audit_log
+from app.services.policy import FX_TO_USD, to_usd_equivalent
 
 router = APIRouter(prefix="/api/v1", tags=["HITL Approvals"])
+logger = get_logger("ledgerpilot.approvals")
 
 ROLE_RANK: dict[UserRole, int] = {
     UserRole.AP_CLERK: 1,
@@ -37,6 +40,11 @@ ROLE_DEFAULT_LIMIT_USD: dict[UserRole, Decimal] = {
     UserRole.FINANCE_MANAGER: Decimal("10000.00"),
     UserRole.CONTROLLER: Decimal("250000.00"),
     UserRole.ADMIN: Decimal("1000000.00"),
+}
+
+RESUMABLE_INVOICE_STATUSES = {
+    InvoiceStatus.AWAITING_APPROVAL,
+    InvoiceStatus.ESCALATED_SLA,
 }
 
 
@@ -81,7 +89,12 @@ async def list_approval_requests(
     only_pending: bool = True,
     limit: int = 50,
 ) -> list[ApprovalRequestResponse]:
-    stmt = select(ApprovalRequest).order_by(ApprovalRequest.created_at.desc())
+    stmt = (
+        select(ApprovalRequest)
+        .join(Invoice, ApprovalRequest.invoice_id == Invoice.id)
+        .where(Invoice.status != InvoiceStatus.CANCELLED)
+        .order_by(ApprovalRequest.created_at.desc())
+    )
     if only_pending:
         stmt = stmt.where(ApprovalRequest.status.in_([ApprovalStatus.PENDING, ApprovalStatus.ESCALATED]))
     rows = (await db.scalars(stmt.limit(min(max(limit, 1), 200)))).all()
@@ -96,10 +109,14 @@ async def decide_approval(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ApprovalDecisionResponse:
     """
-    Verifies RBAC hierarchy, approval spend caps, and SOX 404 Segregation of Duties,
-    then resumes the paused PostgreSQL-checkpointed LangGraph workflow.
+    Acquires row-level PostgreSQL locks (FOR UPDATE) to prevent double-approval races,
+    verifies RBAC hierarchy, FX-normalized USD spend caps, and SOX 404 Segregation of Duties,
+    then resumes the paused PostgreSQL-checkpointed LangGraph workflow with automatic rollback
+    protection if resumption fails.
     """
-    req = await db.scalar(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
+    req = await db.scalar(
+        select(ApprovalRequest).where(ApprovalRequest.id == approval_id).with_for_update()
+    )
     if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval request not found.")
 
@@ -109,15 +126,28 @@ async def decide_approval(
             detail=f"Approval request is already finalized with status '{req.status.value}'.",
         )
 
-    invoice = await db.scalar(select(Invoice).where(Invoice.id == req.invoice_id))
-    if not invoice:
+    invoice = await db.scalar(
+        select(Invoice).where(Invoice.id == req.invoice_id).with_for_update()
+    )
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated invoice not found.")
+
+    if invoice.status not in RESUMABLE_INVOICE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Associated invoice is in '{invoice.status.value}' state and can no longer "
+                "accept approval decisions."
+            ),
+        )
 
     # Capture plain Python primitives before commit()/expire_all() to avoid MissingGreenlet
     req_id = req.id
     inv_id = invoice.id
     actor_id = current_user.id
     actor_email = current_user.email
+    prev_status_enum = req.status
+    prev_status = req.status.value
 
     # Guardrail 1: Strict RBAC role hierarchy enforcement
     if ROLE_RANK[current_user.role] < ROLE_RANK[req.required_role]:
@@ -129,15 +159,24 @@ async def decide_approval(
             ),
         )
 
-    # Guardrail 2: Approval spend-limit enforcement
+    # Guardrail 2: FX-normalized USD approval spend-limit enforcement
     if body.decision == "APPROVED" and invoice.total_amount is not None:
         user_limit = _get_user_approval_limit(current_user)
-        if invoice.total_amount > user_limit:
+        usd_equiv, ccy_code = to_usd_equivalent(invoice.total_amount, invoice.currency)
+        if ccy_code not in FX_TO_USD and ROLE_RANK[current_user.role] < ROLE_RANK[UserRole.CONTROLLER]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    f"Invoice amount {invoice.currency or 'USD'} {invoice.total_amount} "
-                    f"exceeds your approval limit of {user_limit}."
+                    f"Unsupported FX currency '{ccy_code}' requires Corporate Controller "
+                    "or Platform Admin approval."
+                ),
+            )
+        if usd_equiv > user_limit:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Invoice amount {ccy_code} {invoice.total_amount} (~USD {usd_equiv}) "
+                    f"exceeds your USD {user_limit} approval limit."
                 ),
             )
 
@@ -160,7 +199,6 @@ async def decide_approval(
                 ),
             )
 
-    prev_status = req.status.value
     req.status = ApprovalStatus.APPROVED if body.decision == "APPROVED" else ApprovalStatus.REJECTED
     req.decided_by = actor_id
     req.decision_reason = body.reason
@@ -182,12 +220,46 @@ async def decide_approval(
     )
     await db.commit()
 
-    await resume_invoice_workflow(
-        inv_id,
-        decision=body.decision,
-        actor_email=actor_email,
-        reason=body.reason,
-    )
+    try:
+        await resume_invoice_workflow(
+            inv_id,
+            decision=body.decision,
+            actor_email=actor_email,
+            reason=body.reason,
+        )
+    except Exception as exc:
+        # Recover cleanly so ApprovalRequest never stays orphaned as APPROVED if resume fails
+        logger.exception(
+            "approval_workflow_resume_failed",
+            extra={"extra_data": {"approval_id": str(req_id), "invoice_id": str(inv_id)}},
+        )
+        db.expire_all()
+        failed_req = await db.scalar(
+            select(ApprovalRequest).where(ApprovalRequest.id == req_id).with_for_update()
+        )
+        if failed_req:
+            failed_req.status = prev_status_enum
+            failed_req.decided_by = None
+            failed_req.decision_reason = None
+            failed_req.decided_at = None
+            write_audit_log(
+                db,
+                invoice_id=inv_id,
+                actor_type=ActorType.SYSTEM,
+                actor_id="approval_supervisor",
+                action="APPROVAL_RESUME_REVERTED",
+                previous_state=body.decision,
+                new_state=prev_status,
+                details={
+                    "approval_request_id": str(req_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resume invoice checkpoint; approval decision was safely reverted.",
+        ) from exc
 
     db.expire_all()
     refreshed_req = await db.scalar(select(ApprovalRequest).where(ApprovalRequest.id == req_id))
@@ -214,7 +286,9 @@ async def escalate_approval_sla(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> ApprovalRequestResponse:
     """Escalates a pending approval to Corporate Controller when its SLA breaches."""
-    req = await db.scalar(select(ApprovalRequest).where(ApprovalRequest.id == approval_id))
+    req = await db.scalar(
+        select(ApprovalRequest).where(ApprovalRequest.id == approval_id).with_for_update()
+    )
     if not req:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Approval request not found.")
 
@@ -224,28 +298,39 @@ async def escalate_approval_sla(
             detail=f"Cannot escalate finalized approval in status '{req.status.value}'.",
         )
 
+    invoice = await db.scalar(
+        select(Invoice).where(Invoice.id == req.invoice_id).with_for_update()
+    )
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Associated invoice not found.")
+
+    if invoice.status not in RESUMABLE_INVOICE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot escalate SLA for invoice in '{invoice.status.value}' state.",
+        )
+
     prev_status = req.status.value
     req.status = ApprovalStatus.ESCALATED
-    req.required_role = UserRole.CONTROLLER
+    if ROLE_RANK[req.required_role] < ROLE_RANK[UserRole.CONTROLLER]:
+        req.required_role = UserRole.CONTROLLER
 
-    invoice = await db.scalar(select(Invoice).where(Invoice.id == req.invoice_id))
-    if invoice:
-        inv_prev = invoice.status.value
-        invoice.status = InvoiceStatus.ESCALATED_SLA
-        write_audit_log(
-            db,
-            invoice_id=invoice.id,
-            actor_type=ActorType.HUMAN,
-            actor_id=authorized_user.email,
-            action="SLA_ESCALATED",
-            previous_state=inv_prev,
-            new_state=InvoiceStatus.ESCALATED_SLA.value,
-            details={
-                "approval_request_id": str(req.id),
-                "previous_approval_status": prev_status,
-                "escalated_to_role": UserRole.CONTROLLER.value,
-            },
-        )
+    inv_prev = invoice.status.value
+    invoice.status = InvoiceStatus.ESCALATED_SLA
+    write_audit_log(
+        db,
+        invoice_id=invoice.id,
+        actor_type=ActorType.HUMAN,
+        actor_id=authorized_user.email,
+        action="SLA_ESCALATED",
+        previous_state=inv_prev,
+        new_state=InvoiceStatus.ESCALATED_SLA.value,
+        details={
+            "approval_request_id": str(req.id),
+            "previous_approval_status": prev_status,
+            "escalated_to_role": req.required_role.value,
+        },
+    )
 
     await db.commit()
     await db.refresh(req)

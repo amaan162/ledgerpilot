@@ -1,7 +1,8 @@
 import hashlib
+import re
 import uuid
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Annotated
 from xml.etree import ElementTree as ET
@@ -54,6 +55,55 @@ from app.services.intake import ingest_invoice_bytes
 router = APIRouter(prefix="/api/v1", tags=["Invoices & Operations"])
 logger = get_logger("ledgerpilot.invoices")
 
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB hard cap against memory-exhaustion DoS
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+# Reference FX-to-USD rates for accurate multi-currency treasury KPI rollups
+FX_TO_USD: dict[str, Decimal] = {
+    "USD": Decimal("1.00"),
+    "EUR": Decimal("1.09"),
+    "GBP": Decimal("1.27"),
+    "AED": Decimal("0.2723"),
+    "CHF": Decimal("1.13"),
+    "CAD": Decimal("0.73"),
+    "AUD": Decimal("0.66"),
+    "SGD": Decimal("0.75"),
+    "JPY": Decimal("0.0065"),
+}
+
+IN_FLIGHT_STATUSES = {
+    InvoiceStatus.SCANNING_SECURITY,
+    InvoiceStatus.EXTRACTING,
+    InvoiceStatus.MATCHING_DETERMINISTIC,
+    InvoiceStatus.CHECKING_CONTRACT,
+}
+
+COMPLETED_OR_PAUSED_STATUSES = {
+    InvoiceStatus.PAYMENT_STAGED,
+    InvoiceStatus.AUTO_APPROVED,
+    InvoiceStatus.APPROVED,
+    InvoiceStatus.AWAITING_APPROVAL,
+    InvoiceStatus.ESCALATED_SLA,
+    InvoiceStatus.QUARANTINED_FRAUD_RISK,
+    InvoiceStatus.REJECTED,
+}
+
+_XML_ILLEGAL_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_SENSITIVE_URL_RE = re.compile(r"(postgres(?:ql)?(?:\+\w+)?://)[^\s'\"]+", re.IGNORECASE)
+
+
+def _xml_safe(value: str, max_len: int) -> str:
+    cleaned = _XML_ILLEGAL_CTRL_RE.sub("", value).strip()
+    return cleaned[:max_len]
+
+
+def _public_error_detail(exc: Exception) -> str:
+    settings = get_settings()
+    if settings.APP_ENV.lower() == "production":
+        return f"Workflow execution failed ({type(exc).__name__}). Inspect audit logs or retry."
+    redacted = _SENSITIVE_URL_RE.sub(r"\1[REDACTED]", str(exc))
+    return f"Workflow failed ({type(exc).__name__}): {redacted}"
+
 
 class FraudHoldRequest(BaseModel):
     reason: str = Field(..., min_length=5, max_length=1000)
@@ -79,9 +129,15 @@ def _rebuild_iso20022_xml(invoice: Invoice, vendor: Vendor | None) -> str:
     from PostgreSQL Invoice + verified Vendor master records if ephemeral cloud disk was wiped.
     """
     settings = get_settings()
-    debtor_name = str(getattr(settings, "DEBTOR_NAME", "LedgerPilot Global Treasury Ltd."))
-    debtor_iban = str(getattr(settings, "DEBTOR_IBAN", "GB29NWBK60161331926819"))
-    debtor_bic = str(getattr(settings, "DEBTOR_BIC", "NWBKGB2L"))
+    debtor_name = _xml_safe(
+        str(
+            getattr(settings, "DEBTOR_COMPANY_NAME", None)
+            or getattr(settings, "DEBTOR_NAME", "LedgerPilot Global Holdings Ltd")
+        ),
+        70,
+    )
+    debtor_iban = _xml_safe(str(getattr(settings, "DEBTOR_IBAN", "GB29NWBK60161331926819")), 34)
+    debtor_bic = _xml_safe(str(getattr(settings, "DEBTOR_BIC", "NWBKGB2L")), 11)
 
     ts = invoice.created_at or datetime.now(UTC)
     if ts.tzinfo is None:
@@ -89,14 +145,17 @@ def _rebuild_iso20022_xml(invoice: Invoice, vendor: Vendor | None) -> str:
     cre_dt = ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     req_date = ts.astimezone(UTC).strftime("%Y-%m-%d")
 
-    msg_id = invoice.settlement_reference or f"LP-{invoice.id.hex[:12].upper()}"
+    msg_id = _xml_safe(invoice.settlement_reference or f"LP-{invoice.id.hex[:12].upper()}", 35)
     vendor_ccy = getattr(vendor, "default_currency", None) if vendor else None
-    currency = (invoice.currency or vendor_ccy or "USD").upper()
+    currency = _xml_safe((invoice.currency or vendor_ccy or "USD").upper(), 3)
     amount = f"{Decimal(str(invoice.total_amount or '0.00')):.2f}"
-    creditor_name = vendor.legal_name if vendor else "Verified Supplier"
-    creditor_iban = vendor.verified_iban if vendor else "UNVERIFIED"
-    creditor_bic = vendor.verified_bic if vendor else "NOTPROVIDED"
-    remittance = f"Invoice {invoice.invoice_number or invoice.id} / PO {invoice.po_number or 'N/A'}"
+    creditor_name = _xml_safe(vendor.legal_name if vendor else "Verified Supplier", 70)
+    creditor_iban = _xml_safe(vendor.verified_iban if vendor else "UNVERIFIED", 34)
+    creditor_bic = _xml_safe(vendor.verified_bic if vendor else "NOTPROVIDED", 11)
+    remittance = _xml_safe(
+        f"Invoice {invoice.invoice_number or invoice.id} / PO {invoice.po_number or 'N/A'}",
+        140,
+    )
 
     ns = "urn:iso:std:iso:20022:tech:xsd:pain.001.001.03"
     doc = ET.Element("Document", xmlns=ns)
@@ -111,7 +170,7 @@ def _rebuild_iso20022_xml(invoice: Invoice, vendor: Vendor | None) -> str:
     ET.SubElement(initg_pty, "Nm").text = debtor_name
 
     pmt = ET.SubElement(initg, "PmtInf")
-    ET.SubElement(pmt, "PmtInfId").text = f"{msg_id}-PMT1"
+    ET.SubElement(pmt, "PmtInfId").text = _xml_safe(f"{msg_id}-PMT1", 35)
     ET.SubElement(pmt, "PmtMtd").text = "TRF"
     ET.SubElement(pmt, "NbOfTxs").text = "1"
     ET.SubElement(pmt, "CtrlSum").text = amount
@@ -147,6 +206,17 @@ def _rebuild_iso20022_xml(invoice: Invoice, vendor: Vendor | None) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(doc, encoding="unicode")
 
 
+async def _load_invoice_detail(db: AsyncSession, invoice: Invoice) -> InvoiceDetailResponse:
+    logs = (
+        await db.scalars(
+            select(AuditLog).where(AuditLog.invoice_id == invoice.id).order_by(AuditLog.created_at.asc())
+        )
+    ).all()
+    detail = InvoiceDetailResponse.model_validate(invoice)
+    detail.audit_logs = [AuditLogResponse.model_validate(log) for log in logs]
+    return detail
+
+
 @router.post("/invoices/ingest", response_model=InvoiceIngestResponse)
 async def ingest_invoice(
     response: Response,
@@ -155,7 +225,22 @@ async def ingest_invoice(
     db: Annotated[AsyncSession, Depends(get_db)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> InvoiceIngestResponse:
-    raw_bytes = await file.read()
+    # Bounded streaming read prevents unbounded memory allocation DoS
+    chunks: list[bytes] = []
+    total_bytes = 0
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        if total_bytes > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Uploaded document exceeds the 15 MB maximum security limit.",
+            )
+        chunks.append(chunk)
+    raw_bytes = b"".join(chunks)
+
     try:
         safe_filename = validate_uploaded_document(file.filename or "invoice.pdf", raw_bytes)
     except FileSecurityError as exc:
@@ -204,10 +289,23 @@ async def process_invoice(
     _current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> InvoiceDetailResponse:
-    """Executes the stateful LangGraph verification & settlement workflow on an ingested invoice."""
+    """
+    Executes the stateful LangGraph verification & settlement workflow on an ingested invoice.
+    Idempotently returns already-processed dossiers without re-running Gemini or mutating terminal states.
+    """
     invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-    if not invoice:
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
+
+    # Never re-run LLMs or mutate terminal/paused invoices (prevents replay attacks & wasted spend)
+    if invoice.status in COMPLETED_OR_PAUSED_STATUSES:
+        return await _load_invoice_detail(db, invoice)
+
+    if invoice.status in IN_FLIGHT_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Invoice is already being processed (stage: {invoice.status.value}).",
+        )
 
     # Release the outer read transaction before the LangGraph workflow opens its own DB sessions
     await db.rollback()
@@ -238,22 +336,15 @@ async def process_invoice(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Workflow failed ({type(exc).__name__}): {exc}",
+            detail=_public_error_detail(exc),
         ) from exc
 
     db.expire_all()
     refreshed = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-    if not refreshed:
+    if not refreshed or refreshed.status == InvoiceStatus.CANCELLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found after processing.")
 
-    logs = (
-        await db.scalars(
-            select(AuditLog).where(AuditLog.invoice_id == invoice_id).order_by(AuditLog.created_at.asc())
-        )
-    ).all()
-    detail = InvoiceDetailResponse.model_validate(refreshed)
-    detail.audit_logs = [AuditLogResponse.model_validate(log) for log in logs]
-    return detail
+    return await _load_invoice_detail(db, refreshed)
 
 
 @router.delete("/invoices/{invoice_id}")
@@ -275,7 +366,6 @@ async def delete_invoice(
     prev_status = invoice.status.value
     label = invoice.invoice_number or invoice.original_filename
 
-    # Clean up cached PDF and ISO 20022 XML on ephemeral disk if present
     for raw_path in (
         (invoice.extracted_payload or {}).get("stored_file_path"),
         invoice.settlement_xml_path,
@@ -286,10 +376,8 @@ async def delete_invoice(
             except OSError:
                 pass
 
-    # Remove any pending/historical approval tickets tied to this invoice
     await db.execute(delete(ApprovalRequest).where(ApprovalRequest.invoice_id == invoice.id))
 
-    # Release unique locks so the same PDF can be re-uploaded cleanly while keeping audit FK intact
     nonce = uuid.uuid4().hex
     invoice.status = InvoiceStatus.CANCELLED
     invoice.file_sha256 = hashlib.sha256(f"cancelled:{invoice.id}:{nonce}".encode("utf-8")).hexdigest()
@@ -322,17 +410,29 @@ async def place_manual_fraud_hold(
 ) -> InvoiceSummaryResponse:
     """Places a hard manual fraud quarantine hold on an invoice (used by Ops UI and MCP tools)."""
     invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-    if not invoice:
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
-    if invoice.status == InvoiceStatus.PAYMENT_STAGED:
+    if invoice.status in (
+        InvoiceStatus.PAYMENT_STAGED,
+        InvoiceStatus.QUARANTINED_FRAUD_RISK,
+        InvoiceStatus.REJECTED,
+    ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot place fraud hold on an already staged settlement.",
+            detail=f"Cannot place fraud hold on an invoice in '{invoice.status.value}' state.",
         )
 
     prev = invoice.status.value
     invoice.status = InvoiceStatus.QUARANTINED_FRAUD_RISK
     invoice.risk_flags = sorted(set(invoice.risk_flags) | {"MANUAL_FRAUD_HOLD"})
+
+    # Close out any pending approval requests so quarantined invoices cannot still be approved
+    await db.execute(
+        delete(ApprovalRequest).where(
+            ApprovalRequest.invoice_id == invoice.id,
+            ApprovalRequest.status.in_([ApprovalStatus.PENDING, ApprovalStatus.ESCALATED]),
+        )
+    )
 
     actor_type = ActorType.MCP if body.actor_channel.upper() == "MCP" else ActorType.HUMAN
     write_audit_log(
@@ -361,7 +461,11 @@ async def download_settlement_xml(
     Self-heals automatically from PostgreSQL records if ephemeral cloud disk was recycled.
     """
     invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-    if not invoice or (not invoice.settlement_xml_path and not invoice.settlement_reference):
+    if (
+        not invoice
+        or invoice.status != InvoiceStatus.PAYMENT_STAGED
+        or (not invoice.settlement_xml_path and not invoice.settlement_reference)
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No ISO 20022 settlement XML staged for this invoice.",
@@ -413,17 +517,10 @@ async def get_invoice_detail(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> InvoiceDetailResponse:
     invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
-    if not invoice:
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
 
-    logs = (
-        await db.scalars(
-            select(AuditLog).where(AuditLog.invoice_id == invoice_id).order_by(AuditLog.created_at.asc())
-        )
-    ).all()
-    detail = InvoiceDetailResponse.model_validate(invoice)
-    detail.audit_logs = [AuditLogResponse.model_validate(log) for log in logs]
-    return detail
+    return await _load_invoice_detail(db, invoice)
 
 
 @router.get("/vendors", response_model=list[VendorResponse])
@@ -440,7 +537,7 @@ async def get_metrics_overview(
     _current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MetricsOverviewResponse:
-    """Real-time AP operations KPIs, fraud blocks, latency, and LLM operating economics."""
+    """Real-time AP operations KPIs, fraud blocks, FX-normalized USD settlements, and LLM economics."""
     active_filter = Invoice.status != InvoiceStatus.CANCELLED
     total_invoices = int(await db.scalar(select(func.count(Invoice.id)).where(active_filter)) or 0)
 
@@ -462,11 +559,21 @@ async def get_metrics_overview(
         or 0
     )
 
-    staged_sum = await db.scalar(
-        select(func.coalesce(func.sum(Invoice.total_amount), Decimal("0.00"))).where(
-            Invoice.status == InvoiceStatus.PAYMENT_STAGED
+    # FX-normalize staged wires into USD using Decimal precision (never mixes raw EUR/GBP/USD)
+    staged_rows = (
+        await db.execute(
+            select(Invoice.total_amount, Invoice.currency).where(
+                Invoice.status == InvoiceStatus.PAYMENT_STAGED,
+                Invoice.total_amount.is_not(None),
+            )
         )
-    )
+    ).all()
+    staged_usd_total = Decimal("0.00")
+    for amt, ccy in staged_rows:
+        rate = FX_TO_USD.get((ccy or "USD").upper(), Decimal("1.00"))
+        staged_usd_total += Decimal(str(amt)) * rate
+    staged_usd_total = staged_usd_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
     total_llm_cost = await db.scalar(
         select(func.coalesce(func.sum(Invoice.llm_cost_usd), Decimal("0.000000"))).where(active_filter)
     )
@@ -484,7 +591,7 @@ async def get_metrics_overview(
         rejected_count=rejected_count,
         escalated_sla_count=escalated_count,
         pending_approvals_count=pending_approvals,
-        total_staged_amount=Decimal(str(staged_sum)),
+        total_staged_amount=staged_usd_total,
         total_llm_cost_usd=Decimal(str(total_llm_cost)),
         avg_processing_ms=int(round(float(avg_ms or 0))),
     )
