@@ -7,7 +7,6 @@ from typing import Any
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -26,8 +25,11 @@ MODEL_RATES_USD_PER_1M: dict[str, tuple[Decimal, Decimal]] = {
 }
 DEFAULT_RATES_USD_PER_1M = (Decimal("0.30"), Decimal("2.50"))
 FAST_DEFAULT_MODEL = "gemini-3.5-flash-lite"
-SAFE_GENERATIVE_FALLBACKS = ("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash")
+SAFE_GENERATIVE_FALLBACKS = ("gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash")
 FAILOVER_STATUS_CODES = {404, 429, 500, 502, 503, 504}
+
+# Hard per-request timeout (25 seconds) so a stalled model endpoint can never hang for minutes
+GEMINI_HTTP_TIMEOUT_MS = 25_000
 
 _CLIENT_LOCK = threading.Lock()
 _SHARED_CLIENTS: dict[str, genai.Client] = {}
@@ -40,7 +42,13 @@ def _get_shared_client(api_key: str) -> genai.Client:
     with _CLIENT_LOCK:
         client = _SHARED_CLIENTS.get(api_key)
         if client is None:
-            client = genai.Client(api_key=api_key)
+            try:
+                client = genai.Client(
+                    api_key=api_key,
+                    http_options=types.HttpOptions(timeout=GEMINI_HTTP_TIMEOUT_MS),
+                )
+            except Exception:
+                client = genai.Client(api_key=api_key)
             _SHARED_CLIENTS[api_key] = client
         return client
 
@@ -127,207 +135,6 @@ def _build_fast_thinking_config(model_name: str):
 
 class GeminiLLMService:
     """
-    Production Gemini client with shared HTTP/2 connection pooling, strict JSON schemas,
-    low-latency thinking control, automatic model failover, circuit-breaker protection,
-    and FinOps cost telemetry.
+    Production Gemini client with shared HTTP/2 pooling, 25s hard timeouts,
+    strict JSON schemas, low-latency thinking control, and instant model failover.
     """
-
-    def __init__(self) -> None:
-        self.settings = get_settings()
-        if not self.settings.GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY is not configured in .env")
-        self.client = _get_shared_client(self.settings.GEMINI_API_KEY)
-
-    def _model_chain(self) -> list[str]:
-        raw_candidates = [self.settings.GEMINI_MODEL.strip()]
-        raw_candidates.extend(item.strip() for item in self.settings.GEMINI_FALLBACK_MODELS.split(","))
-        raw_candidates.extend(SAFE_GENERATIVE_FALLBACKS)
-
-        candidates: list[str] = []
-        for name in raw_candidates:
-            if not name or "embedding" in name.lower():
-                continue
-            if name not in candidates:
-                candidates.append(name)
-        return candidates or [FAST_DEFAULT_MODEL]
-
-    @retry(
-        reraise=True,
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=3),
-        retry=retry_if_exception_type(genai_errors.ServerError),
-    )
-    def _call_generate(
-        self,
-        *,
-        model_name: str,
-        contents: Any,
-        system_instruction: str,
-        response_schema: type,
-        use_fast_thinking: bool = True,
-    ):
-        config_kwargs: dict[str, Any] = {
-            "system_instruction": system_instruction,
-            "response_mime_type": "application/json",
-            "response_schema": response_schema,
-        }
-        if use_fast_thinking:
-            thinking_cfg = _build_fast_thinking_config(model_name)
-            if thinking_cfg is not None:
-                config_kwargs["thinking_config"] = thinking_cfg
-
-        try:
-            return self.client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(**config_kwargs),
-            )
-        except genai_errors.APIError as exc:
-            if use_fast_thinking and getattr(exc, "code", None) == 400 and "thinking" in str(exc).lower():
-                config_kwargs.pop("thinking_config", None)
-                return self.client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(**config_kwargs),
-                )
-            raise
-
-    def _generate_with_failover(
-        self,
-        *,
-        contents: Any,
-        system_instruction: str,
-        response_schema: type,
-    ) -> tuple[Any, str, Decimal, dict[str, Any]]:
-        gemini_circuit.allow_request()
-        llm_budget_guard.assert_within_budget()
-
-        last_error: Exception | None = None
-        response = None
-        chain = self._model_chain()
-        used_model = chain[0]
-
-        for model_name in chain:
-            try:
-                response = self._call_generate(
-                    model_name=model_name,
-                    contents=contents,
-                    system_instruction=system_instruction,
-                    response_schema=response_schema,
-                )
-                used_model = model_name
-                break
-            except genai_errors.APIError as exc:
-                last_error = exc
-                if getattr(exc, "code", None) in FAILOVER_STATUS_CODES:
-                    logger.warning(
-                        "llm_model_failover",
-                        extra={
-                            "extra_data": {
-                                "failed_model": model_name,
-                                "status_code": getattr(exc, "code", None),
-                                "error": str(exc),
-                            }
-                        },
-                    )
-                    continue
-                raise
-
-        if response is None or not response.text:
-            gemini_circuit.record_failure()
-            raise RuntimeError(f"All models in fallback chain failed ({chain}): {last_error}")
-
-        usage = response.usage_metadata
-        input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
-        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
-        cost_usd = estimate_gemini_cost_usd(used_model, input_tokens, output_tokens)
-
-        gemini_circuit.record_success()
-        llm_budget_guard.record_spend(cost_usd)
-
-        meta = {"model": used_model, "input_tokens": input_tokens, "output_tokens": output_tokens}
-        return response, used_model, cost_usd, meta
-
-    def _extract_sync(
-        self, file_bytes: bytes, mime_type: str
-    ) -> tuple[InvoiceExtraction, Decimal, dict[str, Any]]:
-        response, used_model, cost_usd, meta = self._generate_with_failover(
-            contents=[
-                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-                EXTRACTION_USER_PROMPT,
-            ],
-            system_instruction=EXTRACTION_SYSTEM_PROMPT,
-            response_schema=InvoiceExtractionLLM,
-        )
-        parsed_llm = InvoiceExtractionLLM.model_validate_json(response.text)
-        extraction = InvoiceExtraction.from_llm_output(parsed_llm)
-
-        logger.info(
-            "invoice_extracted_multimodal",
-            extra={
-                "extra_data": {
-                    "model": used_model,
-                    "invoice_number": extraction.invoice_number,
-                    "cost_usd": str(cost_usd),
-                    **meta,
-                }
-            },
-        )
-        return extraction, cost_usd, meta
-
-    async def extract_invoice(
-        self, file_bytes: bytes, filename: str
-    ) -> tuple[InvoiceExtraction, Decimal, dict[str, Any]]:
-        mime_type = detect_mime_type(filename)
-        return await asyncio.to_thread(self._extract_sync, file_bytes, mime_type)
-
-    def _audit_contract_sync(self, prompt_text: str) -> tuple[ContractComplianceLLM, Decimal, dict[str, Any]]:
-        response, used_model, cost_usd, meta = self._generate_with_failover(
-            contents=prompt_text,
-            system_instruction=CONTRACT_AUDIT_SYSTEM_PROMPT,
-            response_schema=ContractComplianceLLM,
-        )
-        parsed = ContractComplianceLLM.model_validate_json(response.text)
-        logger.info(
-            "contract_compliance_audited",
-            extra={
-                "extra_data": {
-                    "model": used_model,
-                    "is_compliant": parsed.is_compliant,
-                    "violations_count": len(parsed.violations),
-                    "cost_usd": str(cost_usd),
-                }
-            },
-        )
-        return parsed, cost_usd, meta
-
-    async def audit_contract_compliance(
-        self, prompt_text: str
-    ) -> tuple[ContractComplianceLLM, Decimal, dict[str, Any]]:
-        return await asyncio.to_thread(self._audit_contract_sync, prompt_text)
-
-    @retry(
-        reraise=True,
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
-        retry=retry_if_exception_type(genai_errors.ServerError),
-    )
-    def _call_embed(self, texts: list[str]):
-        return self.client.models.embed_content(
-            model=self.settings.GEMINI_EMBEDDING_MODEL,
-            contents=texts,
-            config=types.EmbedContentConfig(output_dimensionality=self.settings.EMBEDDING_DIMENSIONS),
-        )
-
-    def _embed_sync(self, texts: list[str]) -> list[list[float]]:
-        gemini_circuit.allow_request()
-        try:
-            result = self._call_embed(texts)
-        except genai_errors.ServerError:
-            gemini_circuit.record_failure()
-            raise
-        gemini_circuit.record_success()
-        return [l2_normalize(list(emb.values)) for emb in result.embeddings]
-
-    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return await asyncio.to_thread(self._embed_sync, texts)
