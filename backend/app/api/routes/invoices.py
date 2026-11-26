@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -18,7 +19,7 @@ from fastapi import (
 )
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, select
+from sqlalchemy import delete, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -208,7 +209,7 @@ async def process_invoice(
     if not invoice:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
 
-    # Release the outer read transaction before the multi-second LangGraph workflow opens its own DB sessions
+    # Release the outer read transaction before the LangGraph workflow opens its own DB sessions
     await db.rollback()
 
     try:
@@ -253,6 +254,61 @@ async def process_invoice(
     detail = InvoiceDetailResponse.model_validate(refreshed)
     detail.audit_logs = [AuditLogResponse.model_validate(log) for log in logs]
     return detail
+
+
+@router.delete("/invoices/{invoice_id}")
+async def delete_invoice(
+    invoice_id: uuid.UUID,
+    authorized_user: Annotated[User, Depends(require_roles(UserRole.ADMIN))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, str]:
+    """
+    SOX 404-compliant Platform Admin archive/removal.
+    Preserves immutable HMAC-sealed audit_logs (never trips the BEFORE DELETE trigger),
+    clears pending HITL approvals, removes disk artifacts, and releases file_sha256 /
+    idempotency / invoice-number locks so the document can be cleanly re-ingested.
+    """
+    invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
+
+    prev_status = invoice.status.value
+    label = invoice.invoice_number or invoice.original_filename
+
+    # Clean up cached PDF and ISO 20022 XML on ephemeral disk if present
+    for raw_path in (
+        (invoice.extracted_payload or {}).get("stored_file_path"),
+        invoice.settlement_xml_path,
+    ):
+        if raw_path:
+            try:
+                Path(raw_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    # Remove any pending/historical approval tickets tied to this invoice
+    await db.execute(delete(ApprovalRequest).where(ApprovalRequest.invoice_id == invoice.id))
+
+    # Release unique locks so the same PDF can be re-uploaded cleanly while keeping audit FK intact
+    nonce = uuid.uuid4().hex
+    invoice.status = InvoiceStatus.CANCELLED
+    invoice.file_sha256 = hashlib.sha256(f"cancelled:{invoice.id}:{nonce}".encode("utf-8")).hexdigest()
+    invoice.idempotency_key = f"cancelled:{invoice.id.hex}:{nonce[:12]}"
+    invoice.settlement_reference = None
+    invoice.settlement_xml_path = None
+
+    write_audit_log(
+        db,
+        invoice_id=invoice.id,
+        actor_type=ActorType.HUMAN,
+        actor_id=authorized_user.email,
+        action="ADMIN_INVOICE_ARCHIVED",
+        previous_state=prev_status,
+        new_state=InvoiceStatus.CANCELLED.value,
+        details={"label": label, "sox404_audit_preserved": True},
+    )
+    await db.commit()
+    return {"status": "deleted", "invoice_id": str(invoice_id), "label": label}
 
 
 @router.post("/invoices/{invoice_id}/fraud-hold", response_model=InvoiceSummaryResponse)
@@ -338,7 +394,15 @@ async def list_invoices(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[InvoiceSummaryResponse]:
-    rows = (await db.scalars(select(Invoice).order_by(desc(Invoice.created_at)).limit(limit).offset(offset))).all()
+    rows = (
+        await db.scalars(
+            select(Invoice)
+            .where(Invoice.status != InvoiceStatus.CANCELLED)
+            .order_by(desc(Invoice.created_at))
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
     return [InvoiceSummaryResponse.model_validate(r) for r in rows]
 
 
@@ -377,7 +441,8 @@ async def get_metrics_overview(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> MetricsOverviewResponse:
     """Real-time AP operations KPIs, fraud blocks, latency, and LLM operating economics."""
-    total_invoices = int(await db.scalar(select(func.count(Invoice.id))) or 0)
+    active_filter = Invoice.status != InvoiceStatus.CANCELLED
+    total_invoices = int(await db.scalar(select(func.count(Invoice.id)).where(active_filter)) or 0)
 
     async def _count_status(st: InvoiceStatus) -> int:
         return int(await db.scalar(select(func.count(Invoice.id)).where(Invoice.status == st)) or 0)
@@ -402,9 +467,13 @@ async def get_metrics_overview(
             Invoice.status == InvoiceStatus.PAYMENT_STAGED
         )
     )
-    total_llm_cost = await db.scalar(select(func.coalesce(func.sum(Invoice.llm_cost_usd), Decimal("0.000000"))))
+    total_llm_cost = await db.scalar(
+        select(func.coalesce(func.sum(Invoice.llm_cost_usd), Decimal("0.000000"))).where(active_filter)
+    )
     avg_ms = await db.scalar(
-        select(func.coalesce(func.avg(Invoice.processing_ms), 0)).where(Invoice.processing_ms > 0)
+        select(func.coalesce(func.avg(Invoice.processing_ms), 0)).where(
+            Invoice.processing_ms > 0, active_filter
+        )
     )
 
     return MetricsOverviewResponse(

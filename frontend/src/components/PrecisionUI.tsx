@@ -62,7 +62,7 @@ export const SPOTLIGHT_PALETTE: Record<SpotlightTone, { fill: string; border: st
 };
 
 /* ============================================================================
-   1. SpotlightCard — Specular Bento Surface with Dual-Layer Cursor Glow
+1. SpotlightCard — Specular Bento Surface with Dual-Layer Cursor Glow
    ============================================================================ */
 export function SpotlightCard({
   children,
@@ -148,7 +148,7 @@ export function SpotlightCard({
 }
 
 /* ============================================================================
-   2. TactileThemeToggle — Pixel-Exact Machined Light / Dark Switch
+2. TactileThemeToggle — Pixel-Exact Machined Light / Dark Switch
    ============================================================================ */
 export function TactileThemeToggle({
   theme,
@@ -194,7 +194,7 @@ export function TactileThemeToggle({
 }
 
 /* ============================================================================
-   3. PersonaPopover — Opaque, Flush, Zero-Snap RBAC Switcher (Exported Utility)
+3. PersonaPopover — Opaque, Flush, Zero-Snap RBAC Switcher (Exported Utility)
    ============================================================================ */
 function initialsOf(name: string) {
   return name
@@ -326,7 +326,7 @@ export function PersonaPopover({
 }
 
 /* ============================================================================
-   4. AnimatedNumber — Spring-Driven Tabular Counter (React 19 Lint-Clean)
+4. AnimatedNumber — Spring-Driven Tabular Counter (International en-US Format)
    ============================================================================ */
 export function AnimatedNumber({
   value,
@@ -351,7 +351,8 @@ export function AnimatedNumber({
     setDisplay(latest);
   });
 
-  const formatted = display.toLocaleString(undefined, {
+  const safeDisplay = Math.abs(display) < 1e-9 ? 0 : display;
+  const formatted = safeDisplay.toLocaleString("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
@@ -366,7 +367,7 @@ export function AnimatedNumber({
 }
 
 /* ============================================================================
-   5. FinOpsDialGauge — Synchronized Orbital Spring Radial Instrument
+5. FinOpsDialGauge — Synchronized Orbital Spring Radial Instrument
    ============================================================================ */
 type DialMode = "fraud" | "settle" | "accuracy";
 
@@ -649,7 +650,7 @@ export function FinOpsDialGauge({
 }
 
 /* ============================================================================
-   6. LivePipelineRail — Real-Time 5-Stage LangGraph Visualizer
+6. LivePipelineRail — Real-Time 5-Stage LangGraph Visualizer with Active Sweep
    ============================================================================ */
 const RAIL_NODES = [
   { label: "Forensics", detail: "OWASP PDF & White-Text Scan", Icon: ShieldAlert },
@@ -666,9 +667,11 @@ export function LivePipelineRail({
   activeStageIdx: number;
   stageMessage: string;
 }) {
+  const progressPct = Math.min(96, Math.round(((activeStageIdx + 0.65) / RAIL_NODES.length) * 100));
+
   return (
     <SpotlightCard tone="cyan" className="border-sky-500/35 p-4 dark:border-sky-400/30">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2.5 w-2.5">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
@@ -678,9 +681,26 @@ export function LivePipelineRail({
             Live LangGraph Execution Pipeline
           </span>
         </div>
-        <span className="font-mono text-[11px] text-sky-600 dark:text-sky-300">
+        <span className="font-mono text-[11px] font-medium text-sky-600 tabular-nums dark:text-sky-300">
           {stageMessage}
         </span>
+      </div>
+
+      {/* Continuous Spring Progress Track */}
+      <div className="relative mb-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-800/80">
+        <motion.div
+          initial={{ width: "8%" }}
+          animate={{ width: `${progressPct}%` }}
+          transition={{ type: "spring", stiffness: 90, damping: 20 }}
+          className="relative h-full overflow-hidden rounded-full bg-linear-to-r from-emerald-500 via-sky-500 to-cyan-400"
+        >
+          <motion.span
+            aria-hidden="true"
+            animate={{ x: ["-100%", "220%"] }}
+            transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+            className="absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-white/55 to-transparent"
+          />
+        </motion.div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
@@ -691,19 +711,27 @@ export function LivePipelineRail({
           return (
             <div
               key={node.label}
-              className={`relative rounded-xl border px-3 py-2.5 transition-colors duration-200 ${
+              className={`relative overflow-hidden rounded-xl border px-3 py-2.5 transition-colors duration-200 ${
                 active
-                  ? "border-sky-500/60 bg-sky-500/10 shadow-[0_0_24px_-10px_rgba(14,165,233,0.75)] dark:bg-sky-500/15"
+                  ? "border-sky-500/65 bg-sky-500/10 shadow-[0_0_24px_-10px_rgba(14,165,233,0.75)] dark:bg-sky-500/15"
                   : completed
                     ? "border-emerald-500/40 bg-emerald-500/10"
                     : "border-slate-200/80 bg-slate-100/70 opacity-60 dark:border-slate-800 dark:bg-slate-900/50"
               }`}
             >
-              <div className="flex items-center justify-between">
+              {active && (
+                <motion.span
+                  aria-hidden="true"
+                  animate={{ x: ["-120%", "220%"] }}
+                  transition={{ repeat: Infinity, duration: 1.8, ease: "linear" }}
+                  className="pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-sky-400/20 to-transparent"
+                />
+              )}
+              <div className="relative z-10 flex items-center justify-between">
                 <Icon
                   className={`h-3.5 w-3.5 ${
                     active
-                      ? "animate-pulse text-sky-600 dark:text-sky-300"
+                      ? "text-sky-600 dark:text-sky-300"
                       : completed
                         ? "text-emerald-600 dark:text-emerald-400"
                         : "text-slate-400"
@@ -711,14 +739,16 @@ export function LivePipelineRail({
                 />
                 {completed ? (
                   <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ) : active ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500 dark:text-sky-300" />
                 ) : (
                   <span className="font-mono text-[10px] text-slate-400">0{idx + 1}</span>
                 )}
               </div>
-              <div className="mt-1.5 text-xs font-semibold text-slate-900 dark:text-white">
+              <div className="relative z-10 mt-1.5 text-xs font-semibold text-slate-900 dark:text-white">
                 {node.label}
               </div>
-              <div className="truncate text-[10px] text-slate-500 dark:text-slate-400">
+              <div className="relative z-10 truncate text-[10px] text-slate-500 dark:text-slate-400">
                 {node.detail}
               </div>
             </div>
@@ -730,7 +760,7 @@ export function LivePipelineRail({
 }
 
 /* ============================================================================
-   7. SandboxDrawer — 100% Opaque, Zero-Snap Slide-Over Simulator
+7. SandboxDrawer — 100% Opaque, Zero-Snap Slide-Over Simulator
    ============================================================================ */
 export interface PresetSpec {
   id: DemoPreset;
@@ -864,7 +894,7 @@ export function SandboxDrawer({
 }
 
 /* ============================================================================
-   8. CommandPalette — 100% Opaque, Zero-Snap Ctrl+K Quick Launcher
+8. CommandPalette — 100% Opaque, Zero-Snap Ctrl+K Quick Launcher
    ============================================================================ */
 export interface PaletteAction {
   id: string;

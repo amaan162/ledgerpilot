@@ -33,6 +33,7 @@ import {
   ShieldBan,
   ShieldCheck,
   Sparkles,
+  Trash2,
   UploadCloud,
   XCircle,
 } from "lucide-react";
@@ -127,15 +128,16 @@ const PRESET_CARDS: PresetSpec[] = [
 
 const PIPELINE_STAGES = [
   "Scanning PDF bytes for active exploits, white text & metadata injections...",
-  "Running Gemini Multimodal Vision extraction with low-latency schema lock...",
+  "Running Gemini Multimodal Vision extraction with schema verification...",
   "Executing deterministic Decimal 3-Way Match, OFAC & IBAN verification...",
-  "Retrieving vendor-isolated pgvector MSA contract clauses...",
+  "Retrieving vendor-isolated pgvector MSA clauses & auditing compliance...",
   "Applying Policy Gate & persisting LangGraph PostgreSQL checkpoint...",
 ];
 
 type Workspace = "command" | "ledger" | "approvals" | "intelligence";
 type IntelSubTab = "vendors" | "analytics";
 type EngineStatus = "connecting" | "waking" | "live";
+type ScrollTarget = "top" | "dossier";
 type StatusFilter =
   | "ALL"
   | "PAYMENT_STAGED"
@@ -179,6 +181,14 @@ function hasControllerClearance(p: Persona): boolean {
   return /controller|admin/i.test(`${p.key} ${p.roleTitle}`);
 }
 
+function stageForElapsedSeconds(elapsedSec: number): number {
+  if (elapsedSec < 2) return 0;
+  if (elapsedSec < 9) return 1;
+  if (elapsedSec < 14) return 2;
+  if (elapsedSec < 21) return 3;
+  return 4;
+}
+
 export default function CommandCenterPage() {
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeServerSnapshot);
   const [workspace, setWorkspace] = useState<Workspace>("command");
@@ -213,17 +223,21 @@ export default function CommandCenterPage() {
   const [wakeAttempts, setWakeAttempts] = useState(0);
 
   const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [liveStageIdx, setLiveStageIdx] = useState(0);
+  const [busyElapsedSec, setBusyElapsedSec] = useState(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [decisionReason, setDecisionReason] = useState<Record<string, string>>({});
 
   const [holdModalOpen, setHoldModalOpen] = useState(false);
   const [holdReason, setHoldReason] = useState("");
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dossierRef = useRef<HTMLDivElement | null>(null);
-  const pendingDossierScrollRef = useRef(false);
+  const pendingScrollTargetRef = useRef<ScrollTarget | null>(null);
   const selectedInvoiceIdRef = useRef<string | null>(null);
+
+  const liveStageIdx = stageForElapsedSeconds(busyElapsedSec);
+  const liveStageMessage = `${PIPELINE_STAGES[liveStageIdx]} (${busyElapsedSec}s elapsed)`;
 
   useEffect(() => {
     selectedInvoiceIdRef.current = selectedInvoice?.id ?? null;
@@ -233,27 +247,48 @@ export default function CommandCenterPage() {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  // Always land cleanly at the top when switching workspaces or Intelligence sub-tabs
-  useEffect(() => {
-    if (pendingDossierScrollRef.current && workspace === "ledger") {
-      pendingDossierScrollRef.current = false;
-      window.setTimeout(() => {
-        if (window.innerWidth < 1024 && dossierRef.current) {
+  const executePendingScroll = useCallback(() => {
+    const target = pendingScrollTargetRef.current;
+    pendingScrollTargetRef.current = null;
+    if (!target) return;
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (target === "dossier" && window.innerWidth < 1024 && dossierRef.current) {
           dossierRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
         } else {
-          window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+          window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
         }
-      }, 60);
-      return;
-    }
-    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-  }, [workspace, intelTab]);
+      });
+    });
+  }, []);
+
+  const navigateWorkspace = useCallback(
+    (next: Workspace, scrollTarget: ScrollTarget = "top") => {
+      pendingScrollTargetRef.current = scrollTarget;
+      if (next === workspace) {
+        executePendingScroll();
+      } else {
+        setWorkspace(next);
+      }
+    },
+    [executePendingScroll, workspace]
+  );
 
   // Bring the live pipeline rail into view when an upload or preset starts
   useEffect(() => {
-    if (busyAction && window.scrollY > 120) {
+    if (busyAction && window.scrollY > 100) {
       window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     }
+  }, [busyAction]);
+
+  // Live 1-second timer while an invoice workflow is running
+  useEffect(() => {
+    if (!busyAction) return;
+    const timer = window.setInterval(() => {
+      setBusyElapsedSec((prev) => prev + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
   }, [busyAction]);
 
   const toggleTheme = useCallback(() => {
@@ -263,11 +298,13 @@ export default function CommandCenterPage() {
     window.dispatchEvent(new Event(THEME_EVENT));
   }, [theme]);
 
-  const openLedgerWithFilter = useCallback((filter: StatusFilter) => {
-    setStatusFilter(filter);
-    setWorkspace("ledger");
-    window.scrollTo({ top: 0, left: 0, behavior: "instant" });
-  }, []);
+  const openLedgerWithFilter = useCallback(
+    (filter: StatusFilter) => {
+      setStatusFilter(filter);
+      navigateWorkspace("ledger", "top");
+    },
+    [navigateWorkspace]
+  );
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -278,6 +315,7 @@ export default function CommandCenterPage() {
         setPaletteOpen(false);
         setSandboxOpen(false);
         setHoldModalOpen(false);
+        setDeleteModalOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -298,15 +336,6 @@ export default function CommandCenterPage() {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
-
-  // Advance cleanly forward through stages instead of looping backwards
-  useEffect(() => {
-    if (!busyAction) return;
-    const timer = window.setInterval(() => {
-      setLiveStageIdx((prev) => Math.min(prev + 1, PIPELINE_STAGES.length - 1));
-    }, 950);
-    return () => window.clearInterval(timer);
-  }, [busyAction]);
 
   const loadWorkspace = useCallback(
     async (selectId?: string) => {
@@ -337,8 +366,7 @@ export default function CommandCenterPage() {
       }, 2500);
 
       try {
-        // Only call Controller/Admin-only endpoints when the active persona has clearance
-        // so non-privileged roles never trigger noisy HTTP 403 errors in browser DevTools.
+        // Only call Controller/Admin-only endpoints when active persona has clearance
         const [mRes, invRes, appRes, evRes, venRes, dlqRes, secRes] = await Promise.allSettled([
           api.getMetrics(persona.apiKey),
           api.listInvoices(persona.apiKey),
@@ -429,7 +457,10 @@ export default function CommandCenterPage() {
           // Ignore storage quota errors
         }
 
-        const targetId = selectId || selectedInvoiceIdRef.current || invList[0]?.id;
+        const stillExists =
+          selectedInvoiceIdRef.current &&
+          invList.some((item) => item.id === selectedInvoiceIdRef.current);
+        const targetId = selectId || (stillExists ? selectedInvoiceIdRef.current : invList[0]?.id);
         if (targetId) {
           const detail = await api.getInvoiceDetail(persona.apiKey, targetId);
           setSelectedInvoice(detail);
@@ -439,6 +470,9 @@ export default function CommandCenterPage() {
           } else {
             setSettlementXml(null);
           }
+        } else {
+          setSelectedInvoice(null);
+          setSettlementXml(null);
         }
       } catch (err) {
         window.clearTimeout(slowTimer);
@@ -530,8 +564,7 @@ export default function CommandCenterPage() {
         setSettlementXml(null);
       }
       if (jumpToLedger) {
-        pendingDossierScrollRef.current = true;
-        setWorkspace("ledger");
+        navigateWorkspace("ledger", "dossier");
       } else if (window.innerWidth < 1024 && dossierRef.current) {
         dossierRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -546,7 +579,7 @@ export default function CommandCenterPage() {
 
   const handleRunPreset = useCallback(
     async (preset: DemoPreset) => {
-      setLiveStageIdx(0);
+      setBusyElapsedSec(0);
       setBusyAction(preset);
       try {
         const detail = await api.runDemoPreset(persona.apiKey, preset);
@@ -563,8 +596,7 @@ export default function CommandCenterPage() {
           `${detail.invoice_number || detail.original_filename} processed in ${detail.processing_ms}ms ($${Number(detail.llm_cost_usd).toFixed(5)}).`
         );
         setStatusFilter("ALL");
-        pendingDossierScrollRef.current = true;
-        setWorkspace("ledger");
+        navigateWorkspace("ledger", "dossier");
         await loadWorkspace(detail.id);
       } catch (err) {
         pushToast(
@@ -574,22 +606,21 @@ export default function CommandCenterPage() {
         );
       } finally {
         setBusyAction(null);
-        setLiveStageIdx(0);
+        setBusyElapsedSec(0);
       }
     },
-    [loadWorkspace, persona.apiKey, pushToast]
+    [loadWorkspace, navigateWorkspace, persona.apiKey, pushToast]
   );
 
   const processUploadedFile = async (file: File) => {
-    setLiveStageIdx(0);
+    setBusyElapsedSec(0);
     setBusyAction("upload");
     try {
       const detail = await api.uploadAndProcessInvoice(persona.apiKey, file);
       setSelectedInvoice(detail);
       pushToast("ok", `Processed ${file.name}`, `Outcome: ${detail.status.replaceAll("_", " ")}`);
       setStatusFilter("ALL");
-      pendingDossierScrollRef.current = true;
-      setWorkspace("ledger");
+      navigateWorkspace("ledger", "dossier");
       await loadWorkspace(detail.id);
     } catch (err) {
       pushToast(
@@ -599,7 +630,7 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
-      setLiveStageIdx(0);
+      setBusyElapsedSec(0);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
@@ -626,7 +657,7 @@ export default function CommandCenterPage() {
         ? `Verified and approved by ${persona.label} (${persona.roleTitle}).`
         : `Rejected by ${persona.label} pending vendor reconciliation.`);
 
-    setLiveStageIdx(0);
+    setBusyElapsedSec(0);
     setBusyAction(req.id);
     try {
       const res = await api.decideApproval(persona.apiKey, req.id, decision, reason);
@@ -639,9 +670,8 @@ export default function CommandCenterPage() {
           ? `ISO 20022 wire staged: ${res.settlement_reference}`
           : "Decision logged immutably to PostgreSQL."
       );
-      pendingDossierScrollRef.current = true;
       await loadWorkspace(req.invoice_id);
-      setWorkspace("ledger");
+      navigateWorkspace("ledger", "dossier");
     } catch (err) {
       pushToast(
         "error",
@@ -650,11 +680,12 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
-      setLiveStageIdx(0);
+      setBusyElapsedSec(0);
     }
   };
 
   const handleEscalateSla = async (req: ApprovalRequestItem) => {
+    setBusyElapsedSec(0);
     setBusyAction(`esc-${req.id}`);
     try {
       await api.escalateApproval(persona.apiKey, req.id);
@@ -672,11 +703,13 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
+      setBusyElapsedSec(0);
     }
   };
 
   const handleConfirmFraudHold = async () => {
     if (!selectedInvoice || holdReason.trim().length < 5) return;
+    setBusyElapsedSec(0);
     setBusyAction("fraud-hold");
     try {
       await api.placeFraudHold(persona.apiKey, selectedInvoice.id, holdReason.trim());
@@ -696,11 +729,42 @@ export default function CommandCenterPage() {
       );
     } finally {
       setBusyAction(null);
+      setBusyElapsedSec(0);
+    }
+  };
+
+  const handleConfirmDeleteInvoice = async () => {
+    if (!selectedInvoice) return;
+    const targetId = selectedInvoice.id;
+    const label = selectedInvoice.invoice_number || selectedInvoice.original_filename;
+    setBusyElapsedSec(0);
+    setBusyAction("delete");
+    try {
+      await api.deleteInvoice(persona.apiKey, targetId);
+      setDeleteModalOpen(false);
+      selectedInvoiceIdRef.current = null;
+      setSelectedInvoice(null);
+      setSettlementXml(null);
+      pushToast(
+        "ok",
+        `Archived & Removed ${label}`,
+        "SOX 404 HMAC audit trail preserved; SHA-256 lock released for clean re-upload."
+      );
+      await loadWorkspace();
+    } catch (err) {
+      pushToast(
+        "error",
+        "SOX 404 RBAC Blocked Deletion",
+        err instanceof Error ? err.message : String(err)
+      );
+    } finally {
+      setBusyAction(null);
+      setBusyElapsedSec(0);
     }
   };
 
   const handleRetryInvoice = async (invoiceId: string) => {
-    setLiveStageIdx(0);
+    setBusyElapsedSec(0);
     setBusyAction("retry");
     try {
       const updated = await api.retryInvoice(persona.apiKey, invoiceId);
@@ -714,7 +778,7 @@ export default function CommandCenterPage() {
       pushToast("error", "Retry Blocked", err instanceof Error ? err.message : String(err));
     } finally {
       setBusyAction(null);
-      setLiveStageIdx(0);
+      setBusyElapsedSec(0);
     }
   };
 
@@ -776,7 +840,7 @@ export default function CommandCenterPage() {
         label: "Command Center",
         hint: "Overview & Vault",
         icon: "nav",
-        onSelect: () => setWorkspace("command"),
+        onSelect: () => navigateWorkspace("command", "top"),
       },
       {
         id: "nav-ledger",
@@ -792,7 +856,7 @@ export default function CommandCenterPage() {
         label: "HITL Approval Queue",
         hint: `${approvals.length} pending`,
         icon: "clock",
-        onSelect: () => setWorkspace("approvals"),
+        onSelect: () => navigateWorkspace("approvals", "top"),
       },
       {
         id: "nav-vendors",
@@ -802,7 +866,7 @@ export default function CommandCenterPage() {
         icon: "nav",
         onSelect: () => {
           setIntelTab("vendors");
-          setWorkspace("intelligence");
+          navigateWorkspace("intelligence", "top");
         },
       },
       {
@@ -813,7 +877,7 @@ export default function CommandCenterPage() {
         icon: "nav",
         onSelect: () => {
           setIntelTab("analytics");
-          setWorkspace("intelligence");
+          navigateWorkspace("intelligence", "top");
         },
       },
       ...PRESET_CARDS.map((card) => ({
@@ -861,6 +925,7 @@ export default function CommandCenterPage() {
       handleRunPreset,
       invoices.length,
       loadWorkspace,
+      navigateWorkspace,
       openLedgerWithFilter,
       pushToast,
       theme,
@@ -965,7 +1030,7 @@ export default function CommandCenterPage() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setWorkspace(item.id)}
+                  onClick={() => navigateWorkspace(item.id, "top")}
                   className={`group relative flex w-full cursor-pointer items-center justify-between rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors duration-150 ${
                     active
                       ? "text-slate-950 dark:text-white"
@@ -1171,14 +1236,14 @@ export default function CommandCenterPage() {
               >
                 <LivePipelineRail
                   activeStageIdx={liveStageIdx}
-                  stageMessage={PIPELINE_STAGES[liveStageIdx]}
+                  stageMessage={liveStageMessage}
                 />
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Active Workspace Views (Pure opacity fade — zero full-page transform snap) */}
-          <AnimatePresence mode="wait">
+          {/* Active Workspace Views (Pure opacity fade + guaranteed post-transition scroll) */}
+          <AnimatePresence mode="wait" onExitComplete={executePendingScroll}>
             <motion.div
               key={workspace}
               initial={{ opacity: 0 }}
@@ -1258,7 +1323,7 @@ export default function CommandCenterPage() {
                         iconTone="text-cyan-600 dark:text-cyan-400"
                         accent="text-cyan-600 dark:text-cyan-400"
                         tone="cyan"
-                        onClick={() => setWorkspace("approvals")}
+                        onClick={() => navigateWorkspace("approvals", "top")}
                         loading={!metrics}
                       >
                         {metrics && <AnimatedNumber value={metrics.pending_approvals_count} />}
@@ -1426,8 +1491,8 @@ export default function CommandCenterPage() {
                                   {inv.invoice_number || inv.original_filename}
                                 </div>
                                 <div className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">
-                                  {inv.po_number || inv.source_channel} &middot; {inv.processing_ms}{" "}
-                                  ms
+                                  {inv.po_number || inv.source_channel} &middot;{" "}
+                                  {inv.processing_ms.toLocaleString("en-US")} ms
                                 </div>
                               </div>
                               <div className="flex shrink-0 items-center gap-3">
@@ -1662,7 +1727,7 @@ export default function CommandCenterPage() {
                                   PO: {selectedInvoice.po_number || "N/A"} &middot; IBAN:{" "}
                                   {selectedInvoice.extracted_iban || "N/A"} &middot; Cost: $
                                   {Number(selectedInvoice.llm_cost_usd).toFixed(5)} &middot;
-                                  Latency: {selectedInvoice.processing_ms} ms
+                                  Latency: {selectedInvoice.processing_ms.toLocaleString("en-US")} ms
                                 </p>
                               </div>
 
@@ -1696,6 +1761,20 @@ export default function CommandCenterPage() {
                                         Place Manual Fraud Hold
                                       </button>
                                     )}
+                                  <button
+                                    type="button"
+                                    disabled={busyAction !== null}
+                                    onClick={() => setDeleteModalOpen(true)}
+                                    title={
+                                      persona.key === "ADMIN"
+                                        ? "Archive & remove invoice (preserves SOX 404 audit trail)"
+                                        : "Platform Admin (Amaan Shaikh) required under SOX 404"
+                                    }
+                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-slate-300/90 bg-white/80 px-3 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-rose-500/50 hover:bg-rose-500/10 hover:text-rose-700 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-300 dark:hover:border-rose-500/50 dark:hover:bg-rose-500/15 dark:hover:text-rose-300"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                    Delete
+                                  </button>
                                 </div>
                               </div>
                             </div>
@@ -2066,7 +2145,10 @@ export default function CommandCenterPage() {
                           <button
                             key={id}
                             type="button"
-                            onClick={() => setIntelTab(id)}
+                            onClick={() => {
+                              setIntelTab(id);
+                              window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+                            }}
                             className={`relative inline-flex cursor-pointer items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
                               active
                                 ? "text-slate-950 dark:text-white"
@@ -2125,7 +2207,7 @@ export default function CommandCenterPage() {
             <button
               key={item.id}
               type="button"
-              onClick={() => setWorkspace(item.id)}
+              onClick={() => navigateWorkspace(item.id, "top")}
               className={`relative flex flex-1 flex-col items-center gap-0.5 rounded-xl py-2 text-[10px] font-semibold ${
                 active ? "text-sky-600 dark:text-sky-400" : "text-slate-500 dark:text-slate-400"
               }`}
@@ -2205,6 +2287,65 @@ export default function CommandCenterPage() {
                 className="cursor-pointer rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
               >
                 Confirm Quarantine
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SOX-404 Admin Archive & Delete Modal (100% Opaque Surface) */}
+      {deleteModalOpen && selectedInvoice && (
+        <div
+          onClick={() => setDeleteModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="modal-surface w-full max-w-md rounded-2xl border border-rose-500/45 bg-white p-5 shadow-2xl dark:bg-[#0d1321]"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-rose-600 dark:text-rose-300">
+                <Trash2 className="h-5 w-5" />
+                <h3 className="text-sm font-bold">Archive &amp; Remove Invoice</h3>
+              </div>
+              <span className="rounded-md bg-violet-500/15 px-2 py-0.5 font-mono text-[10px] font-bold text-violet-700 dark:text-violet-300">
+                ADMIN ONLY &middot; SOX 404
+              </span>
+            </div>
+
+            <p className="mt-2.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">
+              Removes{" "}
+              <strong className="font-mono text-slate-950 dark:text-white">
+                {selectedInvoice.invoice_number || selectedInvoice.original_filename}
+              </strong>{" "}
+              from the active ledger, clears pending approval tickets, and releases its SHA-256
+              deduplication lock so you can re-upload the PDF cleanly. Immutable HMAC-SHA256 audit
+              logs remain sealed in PostgreSQL.
+            </p>
+
+            {persona.key !== "ADMIN" && (
+              <div className="mt-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-800 dark:text-amber-200">
+                Active persona is <strong>{persona.label}</strong> ({persona.roleTitle}). Switch to{" "}
+                <strong>Amaan Shaikh (Platform Admin)</strong> in the top bar to execute deletion—or
+                confirm below to test the live backend <code>403</code> RBAC block.
+              </div>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModalOpen(false)}
+                className="cursor-pointer rounded-xl border border-slate-200 bg-slate-100 px-3.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busyAction !== null}
+                onClick={() => void handleConfirmDeleteInvoice()}
+                className="cursor-pointer rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500 active:opacity-90 disabled:opacity-40"
+              >
+                {busyAction === "delete" ? "Archiving..." : "Confirm Delete"}
               </button>
             </div>
           </div>

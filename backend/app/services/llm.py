@@ -1,5 +1,6 @@
 import asyncio
 import math
+import threading
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -8,7 +9,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-from app.core.config import DEFAULT_GENERATIVE_MODEL, get_settings
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.schemas.extraction import InvoiceExtraction, InvoiceExtractionLLM
 from app.schemas.rag import ContractComplianceLLM
@@ -23,9 +24,26 @@ MODEL_RATES_USD_PER_1M: dict[str, tuple[Decimal, Decimal]] = {
     "gemini-3.6-flash": (Decimal("0.75"), Decimal("3.75")),
     "gemini-3.5-flash-lite": (Decimal("0.30"), Decimal("2.50")),
 }
-DEFAULT_RATES_USD_PER_1M = (Decimal("0.75"), Decimal("3.75"))
-SAFE_GENERATIVE_FALLBACKS = ("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+DEFAULT_RATES_USD_PER_1M = (Decimal("0.30"), Decimal("2.50"))
+FAST_DEFAULT_MODEL = "gemini-3.5-flash-lite"
+SAFE_GENERATIVE_FALLBACKS = ("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash")
 FAILOVER_STATUS_CODES = {404, 429, 500, 502, 503, 504}
+
+_CLIENT_LOCK = threading.Lock()
+_SHARED_CLIENTS: dict[str, genai.Client] = {}
+
+
+def _get_shared_client(api_key: str) -> genai.Client:
+    client = _SHARED_CLIENTS.get(api_key)
+    if client is not None:
+        return client
+    with _CLIENT_LOCK:
+        client = _SHARED_CLIENTS.get(api_key)
+        if client is None:
+            client = genai.Client(api_key=api_key)
+            _SHARED_CLIENTS[api_key] = client
+        return client
+
 
 EXTRACTION_SYSTEM_PROMPT = """
 You are LedgerPilot's strict Accounts Payable Document Extractor.
@@ -88,17 +106,17 @@ def l2_normalize(vector: list[float]) -> list[float]:
 
 def _build_fast_thinking_config(model_name: str):
     """
-    Lowers internal reasoning overhead for structured OCR and clause checks.
-    gemini-3.8-flash and Gemini 4 models support 'low' (not 'minimal');
-    gemini-3.6-flash and Flash-Lite models support 'minimal' for lowest latency.
+    Sets lowest-latency thinking depth per Gemini model family:
+    - gemini-3.5-flash-lite & gemini-3.6-flash support 'minimal' (near-off thinking)
+    - gemini-3.8-flash & Gemini 4 models support 'low' as their fastest level
     """
     if not hasattr(types, "ThinkingConfig"):
         return None
     lower = model_name.lower()
-    if "3.8" in lower or "gemini-4" in lower:
-        level = "low"
-    elif "3.6" in lower or "flash-lite" in lower or "3-flash" in lower:
+    if "3.5-flash-lite" in lower or "3.6" in lower or "flash-lite" in lower or "3-flash" in lower:
         level = "minimal"
+    elif "3.8" in lower or "gemini-4" in lower:
+        level = "low"
     else:
         return None
     try:
@@ -109,15 +127,16 @@ def _build_fast_thinking_config(model_name: str):
 
 class GeminiLLMService:
     """
-    Production Gemini client with strict schemas, low-latency thinking control,
-    automatic model failover, circuit-breaker protection, and cost telemetry.
+    Production Gemini client with shared HTTP/2 connection pooling, strict JSON schemas,
+    low-latency thinking control, automatic model failover, circuit-breaker protection,
+    and FinOps cost telemetry.
     """
 
     def __init__(self) -> None:
         self.settings = get_settings()
         if not self.settings.GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY is not configured in .env")
-        self.client = genai.Client(api_key=self.settings.GEMINI_API_KEY)
+        self.client = _get_shared_client(self.settings.GEMINI_API_KEY)
 
     def _model_chain(self) -> list[str]:
         raw_candidates = [self.settings.GEMINI_MODEL.strip()]
@@ -130,7 +149,7 @@ class GeminiLLMService:
                 continue
             if name not in candidates:
                 candidates.append(name)
-        return candidates or [DEFAULT_GENERATIVE_MODEL]
+        return candidates or [FAST_DEFAULT_MODEL]
 
     @retry(
         reraise=True,
@@ -164,7 +183,6 @@ class GeminiLLMService:
                 config=types.GenerateContentConfig(**config_kwargs),
             )
         except genai_errors.APIError as exc:
-            # If a model rejects thinking_config with HTTP 400, retry once cleanly without it
             if use_fast_thinking and getattr(exc, "code", None) == 400 and "thinking" in str(exc).lower():
                 config_kwargs.pop("thinking_config", None)
                 return self.client.models.generate_content(

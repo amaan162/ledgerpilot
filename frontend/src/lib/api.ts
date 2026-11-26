@@ -320,6 +320,13 @@ export const api = {
   getInvoiceDetail: (apiKey: string, invoiceId: string) =>
     apiFetch<InvoiceDetail>(`/api/v1/invoices/${invoiceId}`, apiKey),
 
+  deleteInvoice: (apiKey: string, invoiceId: string) =>
+    apiFetch<{ status: string; invoice_id: string; label: string }>(
+      `/api/v1/invoices/${invoiceId}`,
+      apiKey,
+      { method: "DELETE" }
+    ),
+
   listPendingApprovals: (apiKey: string) =>
     apiFetch<ApprovalRequestItem[]>("/api/v1/approvals?only_pending=true", apiKey),
 
