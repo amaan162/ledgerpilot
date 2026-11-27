@@ -60,6 +60,7 @@ import { WorkflowStepper } from "@/components/WorkflowStepper";
 import {
   AnimatedNumber,
   CommandPalette,
+  DeleteArchiveBanner,
   FinOpsDialGauge,
   LivePipelineRail,
   SandboxDrawer,
@@ -75,6 +76,12 @@ type DossierMap = Map<string, InvoiceDetail>;
 type XmlMap = Map<string, string | null>;
 type PrefetchMap = Map<string, DossierPromise>;
 type ReasonMap = Record<string, string>;
+
+interface DeleteAnimState {
+  id: string;
+  label: string;
+  stage: 0 | 1 | 2;
+}
 
 const STATUS_BADGE: Record<string, string> = {
   PAYMENT_STAGED:
@@ -216,6 +223,12 @@ function optimisticDetailFromSummary(inv: InvoiceSummary): InvoiceDetail {
   };
 }
 
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 export default function CommandCenterPage() {
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeServerSnapshot);
   const [workspace, setWorkspace] = useState<Workspace>("command");
@@ -252,6 +265,7 @@ export default function CommandCenterPage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [busyElapsedMs, setBusyElapsedMs] = useState(0);
   const [pipelineCompleting, setPipelineCompleting] = useState(false);
+  const [deleteAnim, setDeleteAnim] = useState<DeleteAnimState | null>(null);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [decisionReason, setDecisionReason] = useState<ReasonMap>({});
 
@@ -312,12 +326,12 @@ export default function CommandCenterPage() {
     [executePendingScroll, workspace]
   );
 
-  // Smoothly scroll pipeline rail into view only for actual LangGraph pipeline runs
+  // Smoothly scroll pipeline rail into view for LangGraph runs or SOX 404 delete banner
   useEffect(() => {
-    if (isLangGraphAction(busyAction) && window.scrollY > 100) {
+    if ((isLangGraphAction(busyAction) || deleteAnim !== null) && window.scrollY > 100) {
       window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
     }
-  }, [busyAction]);
+  }, [busyAction, deleteAnim]);
 
   // Smooth 250ms clock for responsive LangGraph pipeline progression
   useEffect(() => {
@@ -331,7 +345,7 @@ export default function CommandCenterPage() {
 
   const finishPipelineSweep = useCallback(async () => {
     setPipelineCompleting(true);
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 460));
+    await waitMs(460);
     setPipelineCompleting(false);
     setBusyAction(null);
     setBusyElapsedMs(0);
@@ -556,7 +570,6 @@ export default function CommandCenterPage() {
           // Ignore storage quota errors
         }
 
-        // Warm the 0ms in-memory dossier cache for the top invoices immediately in the background
         prefetchTopInvoices(invList, persona.apiKey);
 
         const stillExists =
@@ -593,7 +606,6 @@ export default function CommandCenterPage() {
     [fetchAndCacheDossier, persona, prefetchTopInvoices, pushToast]
   );
 
-  // Sequential /health polling (only 1 request in flight -> zero duplicate toasts)
   useEffect(() => {
     if (engineStatus !== "waking") return;
     let cancelled = false;
@@ -658,7 +670,6 @@ export default function CommandCenterPage() {
     });
   }, [invoices, searchQuery, statusFilter]);
 
-  // Lightspeed 0ms invoice selector: instant RAM cache hit or instant optimistic shell + parallel hydrate
   const handleSelectInvoice = useCallback(
     (invoiceId: string, jumpToLedger = false) => {
       const reqSeq = ++selectSeqRef.current;
@@ -892,9 +903,19 @@ export default function CommandCenterPage() {
       dossierCacheRef.current.delete(targetId);
       xmlCacheRef.current.delete(targetId);
 
-      // Instant optimistic ledger update (0ms removal, no pipeline rail flash)
+      // Stage 0: Highlight targeted row + sweep SOX 404 HMAC seal step
+      setDeleteAnim({ id: targetId, label, stage: 0 });
+      await waitMs(220);
+
+      // Stage 1: Release SHA-256 lock step while dossier begins dissolve
+      setDeleteAnim({ id: targetId, label, stage: 1 });
+      await waitMs(220);
+
+      // Stage 2: Hit 100% on banner + slide/collapse deleted row cleanly out of Ledger
+      setDeleteAnim({ id: targetId, label, stage: 2 });
       const remaining = invoices.filter((inv) => inv.id !== targetId);
       setInvoices(remaining);
+
       const nextInv = remaining[0];
       if (nextInv) {
         const cachedNext = dossierCacheRef.current.get(nextInv.id);
@@ -907,6 +928,10 @@ export default function CommandCenterPage() {
         setSettlementXml(null);
       }
 
+      // Hold completed 100% emerald state briefly so the full sweep & row collapse finish cleanly
+      await waitMs(380);
+      setDeleteAnim(null);
+
       pushToast(
         "ok",
         `Archived & Removed ${label}`,
@@ -914,6 +939,7 @@ export default function CommandCenterPage() {
       );
       void loadWorkspace();
     } catch (err) {
+      setDeleteAnim(null);
       pushToast(
         "error",
         "SOX 404 RBAC Blocked Deletion",
@@ -1158,6 +1184,8 @@ export default function CommandCenterPage() {
       : engineStatus === "waking"
         ? "WAKING ENGINE"
         : "SYNCING";
+
+  const isSelectedDeleting = Boolean(deleteAnim && selectedInvoice && deleteAnim.id === selectedInvoice.id);
 
   return (
     <div className="finops-canvas min-h-screen pb-20 text-slate-900 dark:text-slate-100 lg:pb-0">
@@ -1424,7 +1452,21 @@ export default function CommandCenterPage() {
             )}
           </AnimatePresence>
 
-          {/* Active Workspace Views (Pure opacity fade + guaranteed post-transition scroll) */}
+          {/* Synced 3-Stage SOX 404 Archive & Removal Visualizer */}
+          <AnimatePresence>
+            {deleteAnim && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+              >
+                <DeleteArchiveBanner label={deleteAnim.label} stage={deleteAnim.stage} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Active Workspace Views */}
           <AnimatePresence mode="wait" onExitComplete={executePendingScroll}>
             <motion.div
               key={workspace}
@@ -1722,7 +1764,7 @@ export default function CommandCenterPage() {
               )}
 
               {/* ============================================================
-                  WORKSPACE 2: LEDGER & AUDIT DOSSIER (0ms Instant Switch)
+                  WORKSPACE 2: LEDGER & AUDIT DOSSIER (0ms Switch + Delete FX)
                   ============================================================ */}
               {workspace === "ledger" && (
                 <section className="space-y-4">
@@ -1796,7 +1838,7 @@ export default function CommandCenterPage() {
                           })}
                         </div>
 
-                        <div className="flex max-h-[700px] flex-1 flex-col space-y-2 overflow-y-auto pr-0.5">
+                        <div className="flex max-h-[700px] flex-1 flex-col overflow-y-auto pr-0.5">
                           {filteredInvoices.length === 0 ? (
                             <div className="tactile-well flex min-h-[248px] flex-1 flex-col items-center justify-center rounded-xl px-4 py-10 text-center">
                               <FileText className="mb-2 h-5 w-5 text-slate-400" />
@@ -1808,63 +1850,109 @@ export default function CommandCenterPage() {
                               </p>
                             </div>
                           ) : (
-                            filteredInvoices.map((inv) => {
-                              const active = selectedInvoice?.id === inv.id;
-                              return (
-                                <button
-                                  key={inv.id}
-                                  type="button"
-                                  onMouseEnter={() =>
-                                    void fetchAndCacheDossier(
-                                      inv.id,
-                                      persona.apiKey,
-                                      inv.settlement_reference
-                                    )
-                                  }
-                                  onClick={() => handleSelectInvoice(inv.id)}
-                                  className={`w-full cursor-pointer rounded-xl border p-3 text-left transition-colors ${
-                                    active
-                                      ? "border-indigo-500/60 bg-indigo-500/8 shadow-[0_0_24px_-12px_rgba(99,102,241,0.5)] dark:bg-indigo-500/12"
-                                      : "border-slate-200/80 bg-white/70 hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-950/60 dark:hover:border-slate-700"
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-2">
-                                    <span className="truncate font-mono text-xs font-bold text-slate-900 dark:text-white">
-                                      {inv.invoice_number || inv.original_filename}
-                                    </span>
-                                    <span
-                                      className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[9px] font-semibold ${
-                                        STATUS_BADGE[inv.status] || STATUS_BADGE.RECEIVED
+                            <AnimatePresence initial={false}>
+                              {filteredInvoices.map((inv) => {
+                                const active = selectedInvoice?.id === inv.id;
+                                const isArchivingThis = deleteAnim?.id === inv.id;
+                                return (
+                                  <motion.div
+                                    key={inv.id}
+                                    layout="position"
+                                    initial={false}
+                                    animate={{
+                                      opacity: isArchivingThis ? 0.88 : 1,
+                                      x: 0,
+                                      scale: isArchivingThis ? 0.985 : 1,
+                                    }}
+                                    exit={{
+                                      opacity: 0,
+                                      x: -38,
+                                      scale: 0.95,
+                                      height: 0,
+                                      marginBottom: 0,
+                                      overflow: "hidden",
+                                    }}
+                                    transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                                    className="mb-2 last:mb-0"
+                                  >
+                                    <button
+                                      type="button"
+                                      disabled={isArchivingThis}
+                                      onMouseEnter={() =>
+                                        void fetchAndCacheDossier(
+                                          inv.id,
+                                          persona.apiKey,
+                                          inv.settlement_reference
+                                        )
+                                      }
+                                      onClick={() => handleSelectInvoice(inv.id)}
+                                      className={`relative w-full cursor-pointer overflow-hidden rounded-xl border p-3 text-left transition-colors ${
+                                        isArchivingThis
+                                          ? "border-rose-500/75 bg-rose-500/12 shadow-[0_0_24px_-8px_rgba(244,63,94,0.65)] dark:bg-rose-500/18"
+                                          : active
+                                            ? "border-indigo-500/60 bg-indigo-500/8 shadow-[0_0_24px_-12px_rgba(99,102,241,0.5)] dark:bg-indigo-500/12"
+                                            : "border-slate-200/80 bg-white/70 hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-950/60 dark:hover:border-slate-700"
                                       }`}
                                     >
-                                      {inv.status.replaceAll("_", " ")}
-                                    </span>
-                                  </div>
-                                  <div className="mt-1.5 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                                    <span className="truncate">
-                                      {inv.po_number || inv.source_channel}
-                                    </span>
-                                    <span className="font-mono font-semibold text-slate-800 tabular-nums dark:text-slate-200">
-                                      {inv.total_amount
-                                        ? `${inv.currency || "USD"} ${inv.total_amount}`
-                                        : "\u2014"}
-                                    </span>
-                                  </div>
-                                  {inv.risk_flags.length > 0 && (
-                                    <div className="mt-2 flex flex-wrap gap-1">
-                                      {inv.risk_flags.slice(0, 3).map((flag) => (
-                                        <span
-                                          key={flag}
-                                          className="rounded bg-rose-500/12 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-rose-700 dark:text-rose-300"
-                                        >
-                                          {flag}
+                                      {isArchivingThis && (
+                                        <motion.span
+                                          aria-hidden="true"
+                                          initial={{ x: "-100%" }}
+                                          animate={{ x: "220%" }}
+                                          transition={{
+                                            repeat: Infinity,
+                                            duration: 0.75,
+                                            ease: "linear",
+                                          }}
+                                          className="pointer-events-none absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-rose-400/35 to-transparent"
+                                        />
+                                      )}
+                                      <div className="relative z-10 flex items-center justify-between gap-2">
+                                        <span className="truncate font-mono text-xs font-bold text-slate-900 dark:text-white">
+                                          {inv.invoice_number || inv.original_filename}
                                         </span>
-                                      ))}
-                                    </div>
-                                  )}
-                                </button>
-                              );
-                            })
+                                        {isArchivingThis ? (
+                                          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-rose-500/50 bg-rose-500/15 px-2 py-0.5 font-mono text-[9px] font-bold text-rose-700 dark:text-rose-200">
+                                            <Trash2 className="h-2.5 w-2.5" />
+                                            ARCHIVING
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className={`shrink-0 rounded-full border px-2 py-0.5 font-mono text-[9px] font-semibold ${
+                                              STATUS_BADGE[inv.status] || STATUS_BADGE.RECEIVED
+                                            }`}
+                                          >
+                                            {inv.status.replaceAll("_", " ")}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="relative z-10 mt-1.5 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                        <span className="truncate">
+                                          {inv.po_number || inv.source_channel}
+                                        </span>
+                                        <span className="font-mono font-semibold text-slate-800 tabular-nums dark:text-slate-200">
+                                          {inv.total_amount
+                                            ? `${inv.currency || "USD"} ${inv.total_amount}`
+                                            : "\u2014"}
+                                        </span>
+                                      </div>
+                                      {inv.risk_flags.length > 0 && (
+                                        <div className="relative z-10 mt-2 flex flex-wrap gap-1">
+                                          {inv.risk_flags.slice(0, 3).map((flag) => (
+                                            <span
+                                              key={flag}
+                                              className="rounded bg-rose-500/12 px-1.5 py-0.5 font-mono text-[9px] font-semibold text-rose-700 dark:text-rose-300"
+                                            >
+                                              {flag}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </button>
+                                  </motion.div>
+                                );
+                              })}
+                            </AnimatePresence>
                           )}
                         </div>
                       </SpotlightCard>
@@ -1896,7 +1984,14 @@ export default function CommandCenterPage() {
                           </button>
                         </SpotlightCard>
                       ) : (
-                        <div className="space-y-4">
+                        <motion.div
+                          animate={{
+                            opacity: isSelectedDeleting ? 0.32 : 1,
+                            scale: isSelectedDeleting ? 0.985 : 1,
+                          }}
+                          transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                          className="space-y-4"
+                        >
                           <SpotlightCard tone="blue" className="p-5">
                             <div className="space-y-3">
                               {/* Row 1: Invoice Title + Status (Left) | Grand Total (Right) */}
@@ -2170,7 +2265,7 @@ export default function CommandCenterPage() {
                               ))}
                             </div>
                           </SpotlightCard>
-                        </div>
+                        </motion.div>
                       )}
                     </div>
                   </div>

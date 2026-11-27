@@ -20,6 +20,7 @@ import {
   FileSearch,
   FlaskConical,
   Gauge,
+  History,
   LayoutDashboard,
   Loader2,
   Moon,
@@ -30,6 +31,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Trash2,
   UserCheck,
   X,
 } from "lucide-react";
@@ -62,7 +64,71 @@ export const SPOTLIGHT_PALETTE: Record<SpotlightTone, { fill: string; border: st
 };
 
 /* ============================================================================
-1. SpotlightCard — Specular Bento Surface with Dual-Layer Cursor Glow
+   Shared Scroll-Synced Pointer Tracker (Keeps Spotlight Locked on Scroll)
+   ============================================================================ */
+const spotlightSurfaces = new Set<HTMLElement>();
+const globalPointer = { x: -9999, y: -9999, active: false };
+let spotlightRafId = 0;
+let spotlightListenersBound = false;
+
+function syncAllSpotlightPositions() {
+  spotlightRafId = 0;
+  if (!globalPointer.active) return;
+  spotlightSurfaces.forEach((el) => {
+    const rect = el.getBoundingClientRect();
+    el.style.setProperty("--spot-x", `${globalPointer.x - rect.left}px`);
+    el.style.setProperty("--spot-y", `${globalPointer.y - rect.top}px`);
+  });
+}
+
+function scheduleSpotlightSync() {
+  if (!globalPointer.active || spotlightRafId !== 0) return;
+  spotlightRafId = window.requestAnimationFrame(syncAllSpotlightPositions);
+}
+
+function onGlobalPointerMove(e: PointerEvent) {
+  globalPointer.x = e.clientX;
+  globalPointer.y = e.clientY;
+  globalPointer.active = true;
+}
+
+function onGlobalPointerLeave() {
+  globalPointer.active = false;
+}
+
+function registerSpotlightSurface(el: HTMLElement) {
+  spotlightSurfaces.add(el);
+  if (!spotlightListenersBound && typeof window !== "undefined") {
+    spotlightListenersBound = true;
+    window.addEventListener("pointermove", onGlobalPointerMove, { passive: true });
+    window.addEventListener("scroll", scheduleSpotlightSync, { passive: true, capture: true });
+    window.addEventListener("resize", scheduleSpotlightSync, { passive: true });
+    document.addEventListener("mouseleave", onGlobalPointerLeave, { passive: true });
+  }
+  if (globalPointer.active) {
+    const rect = el.getBoundingClientRect();
+    el.style.setProperty("--spot-x", `${globalPointer.x - rect.left}px`);
+    el.style.setProperty("--spot-y", `${globalPointer.y - rect.top}px`);
+  }
+}
+
+function unregisterSpotlightSurface(el: HTMLElement) {
+  spotlightSurfaces.delete(el);
+  if (spotlightSurfaces.size === 0 && spotlightListenersBound && typeof window !== "undefined") {
+    spotlightListenersBound = false;
+    if (spotlightRafId !== 0) {
+      window.cancelAnimationFrame(spotlightRafId);
+      spotlightRafId = 0;
+    }
+    window.removeEventListener("pointermove", onGlobalPointerMove);
+    window.removeEventListener("scroll", scheduleSpotlightSync, true);
+    window.removeEventListener("resize", scheduleSpotlightSync);
+    document.removeEventListener("mouseleave", onGlobalPointerLeave);
+  }
+}
+
+/* ============================================================================
+1. SpotlightCard — Specular Bento Surface with Scroll-Synced Cursor Glow
    ============================================================================ */
 export function SpotlightCard({
   children,
@@ -96,7 +162,17 @@ export function SpotlightCard({
   const divRef = useRef<HTMLDivElement | null>(null);
   const btnRef = useRef<HTMLButtonElement | null>(null);
 
+  useEffect(() => {
+    const el = asButton ? btnRef.current : divRef.current;
+    if (!el) return;
+    registerSpotlightSurface(el);
+    return () => unregisterSpotlightSurface(el);
+  }, [asButton]);
+
   const handleMouseMove = (e: React.MouseEvent<HTMLElement>) => {
+    globalPointer.x = e.clientX;
+    globalPointer.y = e.clientY;
+    globalPointer.active = true;
     const el = asButton ? btnRef.current : divRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -780,6 +856,137 @@ export function LivePipelineRail({
               </div>
               <div className="relative z-10 truncate text-[10px] text-slate-500 dark:text-slate-400">
                 {node.detail}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </SpotlightCard>
+  );
+}
+
+/* ============================================================================
+6B. DeleteArchiveBanner — Synced 3-Stage SOX 404 Archive & Removal Sweep
+   ============================================================================ */
+const DELETE_STEPS = [
+  { label: "Seal HMAC Audit", detail: "SOX 404 record preserved", Icon: History },
+  { label: "Release SHA-256 Lock", detail: "Clear idempotency & tickets", Icon: ShieldCheck },
+  { label: "Remove From Ledger", detail: "Clean active ledger view", Icon: Trash2 },
+];
+
+export function DeleteArchiveBanner({
+  label,
+  stage,
+}: {
+  label: string;
+  stage: 0 | 1 | 2;
+}) {
+  const completed = stage === 2;
+  const progressPct = stage === 0 ? 34 : stage === 1 ? 72 : 100;
+  const statusText =
+    stage === 0
+      ? `Sealing SOX 404 HMAC audit trail for ${label}...`
+      : stage === 1
+        ? `Releasing SHA-256 lock & clearing pending tickets...`
+        : `Archived & removed ${label} cleanly`;
+
+  return (
+    <SpotlightCard
+      tone={completed ? "emerald" : "rose"}
+      className={`p-4 transition-colors duration-200 ${
+        completed
+          ? "border-emerald-500/45 dark:border-emerald-400/40"
+          : "border-rose-500/45 dark:border-rose-400/40"
+      }`}
+    >
+      <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {completed ? (
+            <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+              <Check className="h-3 w-3" />
+            </span>
+          ) : (
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" />
+            </span>
+          )}
+          <span className="text-xs font-bold text-slate-900 dark:text-white">
+            SOX 404 Archive &amp; Removal
+          </span>
+        </div>
+        <span
+          className={`font-mono text-[11px] font-medium ${
+            completed
+              ? "text-emerald-600 dark:text-emerald-300"
+              : "text-rose-600 dark:text-rose-300"
+          }`}
+        >
+          {statusText}
+        </span>
+      </div>
+
+      <div className="relative mb-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-800/80">
+        <motion.div
+          initial={{ width: "10%" }}
+          animate={{ width: `${progressPct}%` }}
+          transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+          className={`relative h-full overflow-hidden rounded-full ${
+            completed
+              ? "bg-linear-to-r from-emerald-500 to-teal-400"
+              : "bg-linear-to-r from-rose-500 via-fuchsia-500 to-violet-500"
+          }`}
+        >
+          {!completed && (
+            <motion.span
+              aria-hidden="true"
+              animate={{ x: ["-100%", "220%"] }}
+              transition={{ repeat: Infinity, duration: 0.9, ease: "linear" }}
+              className="absolute inset-y-0 left-0 w-1/2 bg-linear-to-r from-transparent via-white/55 to-transparent"
+            />
+          )}
+        </motion.div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        {DELETE_STEPS.map((step, idx) => {
+          const Icon = step.Icon;
+          const isDone = completed || idx < stage;
+          const active = !completed && idx === stage;
+          return (
+            <div
+              key={step.label}
+              className={`relative overflow-hidden rounded-xl border px-3 py-2 transition-colors duration-200 ${
+                active
+                  ? "border-rose-500/60 bg-rose-500/10 dark:bg-rose-500/15"
+                  : isDone
+                    ? "border-emerald-500/45 bg-emerald-500/10"
+                    : "border-slate-200/80 bg-slate-100/70 opacity-60 dark:border-slate-800 dark:bg-slate-900/50"
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <Icon
+                  className={`h-3.5 w-3.5 ${
+                    active
+                      ? "text-rose-600 dark:text-rose-300"
+                      : isDone
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-slate-400"
+                  }`}
+                />
+                {isDone ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                ) : active ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-500 dark:text-rose-300" />
+                ) : (
+                  <span className="font-mono text-[10px] text-slate-400">0{idx + 1}</span>
+                )}
+              </div>
+              <div className="mt-1 text-xs font-semibold text-slate-900 dark:text-white">
+                {step.label}
+              </div>
+              <div className="truncate text-[10px] text-slate-500 dark:text-slate-400">
+                {step.detail}
               </div>
             </div>
           );
