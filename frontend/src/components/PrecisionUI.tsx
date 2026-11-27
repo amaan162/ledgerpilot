@@ -507,6 +507,9 @@ export function FinOpsDialGauge({
       fraud: {
         label: "Fraud Recall",
         shortLabel: "Fraud Shield",
+        badge: "OWASP",
+        badgeStyle:
+          "border-emerald-500/35 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
         tone: "emerald" as SpotlightTone,
         pct: Math.min(100, Math.max(0, fraudRecall)),
         display: `${fraudRecall.toFixed(0)}%`,
@@ -518,10 +521,13 @@ export function FinOpsDialGauge({
       settle: {
         label: "STP Settlement",
         shortLabel: "Auto-Settle",
+        badge: "LEDGER",
+        badgeStyle:
+          "border-cyan-500/35 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
         tone: "cyan" as SpotlightTone,
         pct: Math.min(100, Math.max(0, autoSettlePct)),
         display: `${autoSettlePct}%`,
-        sub: `${staged} of ${total} staged XMLs`,
+        sub: `${staged} of ${total} staged ${staged === 1 ? "XML" : "XMLs"}`,
         stroke: "#06b6d4",
         glow: "rgba(6, 182, 212, 0.38)",
         pill: "text-cyan-600 dark:text-cyan-400",
@@ -529,6 +535,9 @@ export function FinOpsDialGauge({
       accuracy: {
         label: "Eval Benchmark",
         shortLabel: "Eval Acc",
+        badge: "BENCHMARK",
+        badgeStyle:
+          "border-violet-500/35 bg-violet-500/10 text-violet-700 dark:text-violet-300",
         tone: "violet" as SpotlightTone,
         pct: Math.min(100, Math.max(0, overallAcc)),
         display: `${overallAcc.toFixed(0)}%`,
@@ -574,12 +583,14 @@ export function FinOpsDialGauge({
               Control Telemetry
             </div>
             <div className="text-[11px] text-slate-500 dark:text-slate-400">
-              Live compliance gauge
+              Compliance &amp; STP telemetry
             </div>
           </div>
         </div>
-        <span className="rounded-full border border-slate-200 bg-slate-100/90 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
-          LIVE
+        <span
+          className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-semibold transition-colors duration-200 ${current.badgeStyle}`}
+        >
+          {current.badge}
         </span>
       </div>
 

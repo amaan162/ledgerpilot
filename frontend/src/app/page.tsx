@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
@@ -31,7 +32,6 @@ import {
   Search,
   ShieldAlert,
   ShieldBan,
-  ShieldCheck,
   Sparkles,
   Trash2,
   UploadCloud,
@@ -1180,9 +1180,9 @@ export default function CommandCenterPage() {
 
   const engineLabel =
     engineStatus === "live"
-      ? "ENGINE LIVE"
+      ? "API ONLINE"
       : engineStatus === "waking"
-        ? "WAKING ENGINE"
+        ? "WAKING API"
         : "SYNCING";
 
   const isSelectedDeleting = Boolean(deleteAnim && selectedInvoice && deleteAnim.id === selectedInvoice.id);
@@ -1208,11 +1208,26 @@ export default function CommandCenterPage() {
         <div>
           <div className="mb-7 flex items-center gap-3 px-2">
             <motion.div
-              whileHover={{ rotate: 6, scale: 1.05 }}
+              whileHover={{ scale: 1.06 }}
               transition={{ type: "spring", stiffness: 420, damping: 24 }}
-              className="flex h-9 w-9 items-center justify-center rounded-xl bg-linear-to-br from-emerald-500/20 via-sky-500/20 to-indigo-500/20 ring-1 ring-emerald-500/40 shadow-sm"
+              className="relative h-9 w-9 shrink-0 overflow-hidden rounded-xl ring-1 ring-slate-900/12 shadow-sm dark:ring-white/15"
             >
-              <ShieldCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+              <Image
+                src="/logo_light.png"
+                alt="LedgerPilot"
+                width={36}
+                height={36}
+                priority
+                className="h-full w-full object-cover dark:hidden"
+              />
+              <Image
+                src="/logo_dark.png"
+                alt="LedgerPilot"
+                width={36}
+                height={36}
+                priority
+                className="hidden h-full w-full object-cover dark:block"
+              />
             </motion.div>
             <div>
               <div className="text-sm font-bold tracking-tight text-slate-950 dark:text-white">
@@ -1331,8 +1346,23 @@ export default function CommandCenterPage() {
           />
           <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-3 px-4 sm:px-6">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/15 ring-1 ring-emerald-500/35 lg:hidden">
-                <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded-lg ring-1 ring-slate-900/12 dark:ring-white/15 lg:hidden">
+                <Image
+                  src="/logo_light.png"
+                  alt="LedgerPilot"
+                  width={32}
+                  height={32}
+                  priority
+                  className="h-full w-full object-cover dark:hidden"
+                />
+                <Image
+                  src="/logo_dark.png"
+                  alt="LedgerPilot"
+                  width={32}
+                  height={32}
+                  priority
+                  className="hidden h-full w-full object-cover dark:block"
+                />
               </div>
 
               <button
@@ -1511,7 +1541,7 @@ export default function CommandCenterPage() {
                     <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:col-span-8">
                       <KpiBento
                         label="Total Processed"
-                        sub="Idempotent Ledger"
+                        sub="SHA-256 Deduplicated"
                         icon={FileText}
                         iconTone="text-indigo-600 dark:text-indigo-400"
                         tone="indigo"
@@ -1523,7 +1553,7 @@ export default function CommandCenterPage() {
 
                       <KpiBento
                         label="Payments Staged"
-                        sub={`${metrics?.payment_staged_count ?? 0} ISO 20022 XMLs`}
+                        sub={`${metrics?.payment_staged_count ?? 0} ${(metrics?.payment_staged_count ?? 0) === 1 ? "ISO 20022 XML" : "ISO 20022 XMLs"} \u00B7 USD eq.`}
                         icon={DollarSign}
                         iconTone="text-emerald-600 dark:text-emerald-400"
                         accent="text-emerald-600 dark:text-emerald-400"
@@ -1542,7 +1572,7 @@ export default function CommandCenterPage() {
 
                       <KpiBento
                         label="Pending HITL"
-                        sub="Paused Checkpoints"
+                        sub="Awaiting Sign-Off"
                         icon={Clock}
                         iconTone="text-cyan-600 dark:text-cyan-400"
                         accent="text-cyan-600 dark:text-cyan-400"
@@ -1568,7 +1598,7 @@ export default function CommandCenterPage() {
 
                       <KpiBento
                         label="Avg Latency"
-                        sub="End-to-End Graph"
+                        sub="End-to-End Pipeline"
                         icon={Gauge}
                         iconTone="text-violet-600 dark:text-violet-400"
                         accent="text-violet-700 dark:text-violet-300"
