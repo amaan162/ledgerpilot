@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -251,6 +252,24 @@ class Invoice(Base):
                 "vendor_id IS NOT NULL AND invoice_number IS NOT NULL AND status NOT IN ('REJECTED', 'CANCELLED')"
             ),
         ),
+    )
+
+
+class InvoiceDocument(Base):
+    """Persistent binary store for uploaded source PDFs/images (survives ephemeral cloud disk wipes)."""
+
+    __tablename__ = "invoice_documents"
+
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 

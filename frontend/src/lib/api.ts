@@ -185,6 +185,25 @@ export interface LineVariance {
   actual_value: string;
 }
 
+export interface DocumentPreviewPage {
+  page: number;
+  width: number;
+  height: number;
+  data_url: string;
+}
+
+export interface DocumentPreviewResponse {
+  invoice_id: string;
+  filename: string;
+  content_type: string;
+  page_count: number;
+  rendered_pages: number;
+  is_quarantined: boolean;
+  sanitized_raster: boolean;
+  download_allowed: boolean;
+  pages: DocumentPreviewPage[];
+}
+
 export interface InvoiceSummary {
   id: string;
   idempotency_key: string;
@@ -402,6 +421,27 @@ export const api = {
     apiFetch<ApprovalRequestItem>(`/api/v1/approvals/${approvalId}/escalate-sla`, apiKey, {
       method: "POST",
     }),
+
+  getDocumentPreview: (apiKey: string, invoiceId: string) =>
+    apiFetch<DocumentPreviewResponse>(`/api/v1/invoices/${invoiceId}/document/preview`, apiKey),
+
+  downloadOriginalDocument: async (apiKey: string, invoiceId: string): Promise<Blob> => {
+    const resp = await fetch(`${API_BASE_URL}/api/v1/invoices/${invoiceId}/document`, {
+      headers: { "X-API-Key": apiKey },
+      cache: "no-store",
+    });
+    if (!resp.ok) {
+      let message = `Unable to download source document (HTTP ${resp.status})`;
+      try {
+        const body = await resp.json();
+        if (typeof body.detail === "string") message = body.detail;
+      } catch {
+        // Keep fallback HTTP error message
+      }
+      throw new ApiError(resp.status, message);
+    }
+    return resp.blob();
+  },
 
   getSettlementXml: async (apiKey: string, invoiceId: string): Promise<string> => {
     const resp = await fetch(

@@ -4,6 +4,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -22,6 +23,7 @@ from app.core.hardening import (
     get_security_headers,
 )
 from app.core.logging import configure_logging, correlation_id_ctx, get_logger
+from app.db.session import AsyncSessionLocal
 from app.graph.checkpointer import checkpointer_manager
 
 settings = get_settings()
@@ -61,6 +63,27 @@ def _safe_error_detail(exc: Exception) -> str:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS invoice_documents (
+                        invoice_id UUID PRIMARY KEY REFERENCES invoices(id) ON DELETE CASCADE,
+                        content_type VARCHAR(100) NOT NULL,
+                        file_size_bytes INTEGER NOT NULL,
+                        file_bytes BYTEA NOT NULL,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "invoice_documents_bootstrap_skipped",
+            extra={"extra_data": {"error": str(exc)}},
+        )
     yield
     checkpointer_manager.close()
 

@@ -19,6 +19,7 @@ import {
   Cpu,
   DollarSign,
   Download,
+  Eye,
   FileCode2,
   FileText,
   FileUp,
@@ -45,6 +46,7 @@ import {
   type AuditIntegrityReport,
   type DeadLetterItem,
   type DemoPreset,
+  type DocumentPreviewResponse,
   type EvalScorecard,
   type InvoiceDetail,
   type InvoiceSummary,
@@ -53,6 +55,7 @@ import {
   type SecurityPosture,
   type VendorRecord,
 } from "@/lib/api";
+import { DocumentViewerModal } from "@/components/DocumentViewerModal";
 import { FinOpsAnalytics } from "@/components/FinOpsAnalytics";
 import { ToastStack, type ToastItem } from "@/components/ToastStack";
 import { VendorContractHub } from "@/components/VendorContractHub";
@@ -76,6 +79,7 @@ type DossierMap = Map<string, InvoiceDetail>;
 type XmlMap = Map<string, string | null>;
 type PrefetchMap = Map<string, DossierPromise>;
 type ReasonMap = Record<string, string>;
+type DocPreviewMap = Map<string, DocumentPreviewResponse>;
 
 interface DeleteAnimState {
   id: string;
@@ -273,6 +277,14 @@ export default function CommandCenterPage() {
   const [holdReason, setHoldReason] = useState("");
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
 
+  const [docModalOpen, setDocModalOpen] = useState(false);
+  const [docModalInvoiceId, setDocModalInvoiceId] = useState<string | null>(null);
+  const [docModalLabel, setDocModalLabel] = useState("");
+  const [docModalLoading, setDocModalLoading] = useState(false);
+  const [docModalDownloading, setDocModalDownloading] = useState(false);
+  const [docModalError, setDocModalError] = useState<string | null>(null);
+  const [docPreview, setDocPreview] = useState<DocumentPreviewResponse | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dossierRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollTargetRef = useRef<ScrollTarget | null>(null);
@@ -282,6 +294,7 @@ export default function CommandCenterPage() {
   const dossierCacheRef = useRef<DossierMap>(new Map());
   const xmlCacheRef = useRef<XmlMap>(new Map());
   const inflightPrefetchRef = useRef<PrefetchMap>(new Map());
+  const docPreviewCacheRef = useRef<DocPreviewMap>(new Map());
   const selectSeqRef = useRef(0);
 
   const showPipelineRail = isLangGraphAction(busyAction) || pipelineCompleting;
@@ -430,6 +443,7 @@ export default function CommandCenterPage() {
         setSandboxOpen(false);
         setHoldModalOpen(false);
         setDeleteModalOpen(false);
+        setDocModalOpen(false);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -762,6 +776,7 @@ export default function CommandCenterPage() {
       const [xml] = await Promise.all([xmlPromise, finishPipelineSweep()]);
       dossierCacheRef.current.set(detail.id, detail);
       xmlCacheRef.current.set(detail.id, xml);
+      docPreviewCacheRef.current.delete(detail.id);
       setSelectedInvoice(detail);
       setSettlementXml(xml);
 
@@ -902,6 +917,7 @@ export default function CommandCenterPage() {
       setDeleteModalOpen(false);
       dossierCacheRef.current.delete(targetId);
       xmlCacheRef.current.delete(targetId);
+      docPreviewCacheRef.current.delete(targetId);
 
       // Stage 0: Highlight targeted row + sweep SOX 404 HMAC seal step
       setDeleteAnim({ id: targetId, label, stage: 0 });
@@ -1011,6 +1027,59 @@ export default function CommandCenterPage() {
       pushToast("error", "DLQ Resolution Failed", err instanceof Error ? err.message : String(err));
     }
   };
+
+  const handleOpenDocumentPreview = useCallback(
+    async (invoiceId: string, label: string) => {
+      setDocModalInvoiceId(invoiceId);
+      setDocModalLabel(label);
+      setDocModalError(null);
+      setDocModalOpen(true);
+
+      const cached = docPreviewCacheRef.current.get(invoiceId);
+      if (cached) {
+        setDocPreview(cached);
+        setDocModalLoading(false);
+        return;
+      }
+
+      setDocPreview(null);
+      setDocModalLoading(true);
+      try {
+        const res = await api.getDocumentPreview(persona.apiKey, invoiceId);
+        docPreviewCacheRef.current.set(invoiceId, res);
+        setDocPreview(res);
+      } catch (err) {
+        setDocModalError(
+          err instanceof Error ? err.message : "Unable to load source document preview."
+        );
+      } finally {
+        setDocModalLoading(false);
+      }
+    },
+    [persona.apiKey]
+  );
+
+  const handleDownloadSourceDocument = useCallback(async () => {
+    if (!docModalInvoiceId) return;
+    setDocModalDownloading(true);
+    try {
+      const blob = await api.downloadOriginalDocument(persona.apiKey, docModalInvoiceId);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = docPreview?.filename || `${docModalLabel || "invoice"}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      pushToast(
+        "error",
+        "Download Blocked",
+        err instanceof Error ? err.message : "Unable to download document."
+      );
+    } finally {
+      setDocModalDownloading(false);
+    }
+  }, [docModalInvoiceId, docModalLabel, docPreview?.filename, persona.apiKey, pushToast]);
 
   const handleCopyXml = async () => {
     if (!settlementXml) return;
@@ -2057,6 +2126,21 @@ export default function CommandCenterPage() {
                                 </p>
 
                                 <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      void handleOpenDocumentPreview(
+                                        selectedInvoice.id,
+                                        selectedInvoice.original_filename ||
+                                          selectedInvoice.invoice_number ||
+                                          "Source Invoice"
+                                      )
+                                    }
+                                    className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-[11px] font-semibold text-sky-700 transition hover:bg-sky-500/20 dark:text-sky-200"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    View Source PDF
+                                  </button>
                                   {(selectedInvoice.status === "RECEIVED" ||
                                     selectedInvoice.status === "FAILED") && (
                                     <button
@@ -2392,6 +2476,19 @@ export default function CommandCenterPage() {
                             )}
                             <button
                               type="button"
+                              onClick={() =>
+                                void handleOpenDocumentPreview(
+                                  req.invoice_id,
+                                  `Invoice ${req.invoice_id.slice(0, 8)}`
+                                )
+                              }
+                              className="inline-flex cursor-pointer items-center gap-1 rounded-xl border border-sky-500/35 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-sky-700 transition hover:bg-sky-500/20 dark:text-sky-200"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              View PDF
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleSelectInvoice(req.invoice_id, true)}
                               className="inline-flex cursor-pointer items-center gap-1 text-xs font-semibold text-sky-600 hover:underline dark:text-sky-400"
                             >
@@ -2672,6 +2769,18 @@ export default function CommandCenterPage() {
           </div>
         </div>
       )}
+
+      {/* Safe Rasterized Source Document Viewer Modal */}
+      <DocumentViewerModal
+        open={docModalOpen}
+        label={docModalLabel}
+        loading={docModalLoading}
+        downloading={docModalDownloading}
+        error={docModalError}
+        preview={docPreview}
+        onClose={() => setDocModalOpen(false)}
+        onDownload={() => void handleDownloadSourceDocument()}
+      />
 
       {/* Floating Toast Stack */}
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

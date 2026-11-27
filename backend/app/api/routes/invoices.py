@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import re
 import uuid
@@ -7,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 from xml.etree import ElementTree as ET
 
+import pymupdf
 from fastapi import (
     APIRouter,
     Depends,
@@ -33,6 +35,7 @@ from app.db.models import (
     AuditLog,
     DeadLetterJob,
     Invoice,
+    InvoiceDocument,
     InvoiceStatus,
     User,
     UserRole,
@@ -377,6 +380,7 @@ async def delete_invoice(
                 pass
 
     await db.execute(delete(ApprovalRequest).where(ApprovalRequest.invoice_id == invoice.id))
+    await db.execute(delete(InvoiceDocument).where(InvoiceDocument.invoice_id == invoice.id))
 
     nonce = uuid.uuid4().hex
     invoice.status = InvoiceStatus.CANCELLED
@@ -608,3 +612,202 @@ async def list_dead_letters(
         stmt = stmt.where(DeadLetterJob.resolved.is_(False))
     jobs = (await db.scalars(stmt.limit(50))).all()
     return [DeadLetterResponse.model_validate(j) for j in jobs]
+
+MAX_PREVIEW_PAGES = 5
+
+
+class DocumentPreviewPage(BaseModel):
+    page: int
+    width: int
+    height: int
+    data_url: str
+
+
+class DocumentPreviewResponse(BaseModel):
+    invoice_id: uuid.UUID
+    filename: str
+    content_type: str
+    page_count: int
+    rendered_pages: int
+    is_quarantined: bool
+    sanitized_raster: bool
+    download_allowed: bool
+    pages: list[DocumentPreviewPage]
+
+
+def _guess_content_type(filename: str) -> str:
+    ext = Path(filename or "").suffix.lower()
+    if ext == ".png":
+        return "image/png"
+    if ext in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    return "application/pdf"
+
+
+def _is_quarantined_document(invoice: Invoice) -> bool:
+    flags = set(invoice.risk_flags or [])
+    return (
+        invoice.status == InvoiceStatus.QUARANTINED_FRAUD_RISK
+        or "PDF_ACTIVE_CONTENT_EXPLOIT" in flags
+    )
+
+
+async def _resolve_invoice_document_bytes(
+    db: AsyncSession, invoice: Invoice
+) -> tuple[bytes, str] | None:
+    doc_row = await db.scalar(
+        select(InvoiceDocument).where(InvoiceDocument.invoice_id == invoice.id)
+    )
+    if doc_row is not None:
+        return doc_row.file_bytes, doc_row.content_type
+
+    stored_path_str = (invoice.extracted_payload or {}).get("stored_file_path")
+    if stored_path_str:
+        stored_path = Path(stored_path_str)
+        if stored_path.is_file():
+            raw_bytes = stored_path.read_bytes()
+            ctype = _guess_content_type(invoice.original_filename or stored_path.name)
+            try:
+                db.add(
+                    InvoiceDocument(
+                        invoice_id=invoice.id,
+                        content_type=ctype,
+                        file_size_bytes=len(raw_bytes),
+                        file_bytes=raw_bytes,
+                    )
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+            return raw_bytes, ctype
+
+    return None
+
+
+@router.get("/invoices/{invoice_id}/document/preview", response_model=DocumentPreviewResponse)
+async def get_invoice_document_preview(
+    invoice_id: uuid.UUID,
+    _current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DocumentPreviewResponse:
+    """
+    Renders sanitized server-side PNG page previews via PyMuPDF so auditors can visually
+    inspect invoices (including quarantined/red-team PDFs) with zero browser script risk.
+    """
+    invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
+
+    resolved = await _resolve_invoice_document_bytes(db, invoice)
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Source document is not archived for this older record. Re-upload the same PDF via "
+                "Ingest Invoice to backfill it idempotently with $0 extra LLM cost."
+            ),
+        )
+
+    raw_bytes, content_type = resolved
+    is_quarantined = _is_quarantined_document(invoice)
+    pages: list[DocumentPreviewPage] = []
+    page_count = 1
+
+    if content_type == "application/pdf" or raw_bytes.startswith(b"%PDF-"):
+        try:
+            with pymupdf.open(stream=raw_bytes, filetype="pdf") as pdf_doc:
+                page_count = len(pdf_doc)
+                for idx in range(min(page_count, MAX_PREVIEW_PAGES)):
+                    page = pdf_doc.load_page(idx)
+                    pix = page.get_pixmap(matrix=pymupdf.Matrix(1.8, 1.8), alpha=False)
+                    b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
+                    pages.append(
+                        DocumentPreviewPage(
+                            page=idx + 1,
+                            width=pix.width,
+                            height=pix.height,
+                            data_url=f"data:image/png;base64,{b64}",
+                        )
+                    )
+        except Exception as exc:
+            logger.warning(
+                "pdf_preview_render_failed",
+                extra={"extra_data": {"invoice_id": str(invoice_id), "error": str(exc)}},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Unable to rasterize source PDF safely.",
+            ) from exc
+    else:
+        ext_hint = "png" if content_type == "image/png" else "jpeg"
+        try:
+            with pymupdf.open(stream=raw_bytes, filetype=ext_hint) as img_doc:
+                pix = img_doc.load_page(0).get_pixmap(alpha=False)
+                b64 = base64.b64encode(pix.tobytes("png")).decode("ascii")
+                pages.append(
+                    DocumentPreviewPage(
+                        page=1,
+                        width=pix.width,
+                        height=pix.height,
+                        data_url=f"data:image/png;base64,{b64}",
+                    )
+                )
+        except Exception:
+            b64 = base64.b64encode(raw_bytes).decode("ascii")
+            pages.append(
+                DocumentPreviewPage(
+                    page=1,
+                    width=0,
+                    height=0,
+                    data_url=f"data:{content_type};base64,{b64}",
+                )
+            )
+
+    return DocumentPreviewResponse(
+        invoice_id=invoice.id,
+        filename=invoice.original_filename,
+        content_type=content_type,
+        page_count=page_count,
+        rendered_pages=len(pages),
+        is_quarantined=is_quarantined,
+        sanitized_raster=True,
+        download_allowed=not is_quarantined,
+        pages=pages,
+    )
+
+
+@router.get("/invoices/{invoice_id}/document")
+async def download_invoice_document(
+    invoice_id: uuid.UUID,
+    _current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Response:
+    """Downloads the original source PDF/image for non-quarantined invoices."""
+    invoice = await db.scalar(select(Invoice).where(Invoice.id == invoice_id))
+    if not invoice or invoice.status == InvoiceStatus.CANCELLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found.")
+
+    if _is_quarantined_document(invoice):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Raw file download is blocked for quarantined/exploit-flagged documents. Use the sanitized raster preview.",
+        )
+
+    resolved = await _resolve_invoice_document_bytes(db, invoice)
+    if resolved is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Source document is not archived for this older record.",
+        )
+
+    raw_bytes, content_type = resolved
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", invoice.original_filename or "invoice.pdf")[:160]
+    return Response(
+        content=raw_bytes,
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )

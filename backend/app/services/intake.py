@@ -9,11 +9,41 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import REPO_ROOT
-from app.db.models import ActorType, Invoice, InvoiceStatus
+from app.db.models import ActorType, Invoice, InvoiceDocument, InvoiceStatus
 from app.services.audit import write_audit_log
 
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
 MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB
+
+
+def _content_type_for_ext(ext: str) -> str:
+    lowered = ext.lower()
+    if lowered == ".png":
+        return "image/png"
+    if lowered in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    return "application/pdf"
+
+
+async def _ensure_document_stored(
+    db: AsyncSession,
+    *,
+    invoice_id: uuid.UUID,
+    ext: str,
+    file_bytes: bytes,
+) -> None:
+    exists = await db.scalar(
+        select(InvoiceDocument.invoice_id).where(InvoiceDocument.invoice_id == invoice_id)
+    )
+    if exists is None:
+        db.add(
+            InvoiceDocument(
+                invoice_id=invoice_id,
+                content_type=_content_type_for_ext(ext),
+                file_size_bytes=len(file_bytes),
+                file_bytes=file_bytes,
+            )
+        )
 
 
 def compute_sha256(data: bytes) -> str:
@@ -77,6 +107,7 @@ async def ingest_invoice_bytes(
         )
     )
     if existing:
+        await _ensure_document_stored(db, invoice_id=existing.id, ext=ext, file_bytes=file_bytes)
         write_audit_log(
             db,
             invoice_id=existing.id,
@@ -111,6 +142,14 @@ async def ingest_invoice_bytes(
     try:
         db.add(invoice)
         await db.flush()
+        db.add(
+            InvoiceDocument(
+                invoice_id=invoice.id,
+                content_type=_content_type_for_ext(ext),
+                file_size_bytes=len(file_bytes),
+                file_bytes=file_bytes,
+            )
+        )
         write_audit_log(
             db,
             invoice_id=invoice.id,
@@ -142,6 +181,7 @@ async def ingest_invoice_bytes(
         )
         if not existing:
             raise
+        await _ensure_document_stored(db, invoice_id=existing.id, ext=ext, file_bytes=file_bytes)
         write_audit_log(
             db,
             invoice_id=existing.id,
